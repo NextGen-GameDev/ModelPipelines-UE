@@ -12,8 +12,10 @@ sys.path.insert(0, TOOLS)
 
 import fetch_tokenizers as ft  # noqa: E402
 
-MODELS = os.path.join(ROOT, ".pipelines-dev", "models", "tokenizers")
-GOLDENS = os.path.join(ROOT, ".pipelines-dev", "goldens", "tokenizers")
+import _paths  # noqa: E402
+
+MODELS = os.path.join(_paths.dev_dir(), "models", "tokenizers")
+GOLDENS = os.path.join(_paths.dev_dir(), "goldens", "tokenizers")
 STRINGS = os.path.join(TOOLS, "data", "tokenizer_strings.json")
 NAMES = ["bert-base-uncased", "gpt2", "t5-small"]
 

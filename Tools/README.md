@@ -11,4 +11,11 @@ Tokenizer goldens (WP0.2):
 2. `make_tokenizer_goldens.py --models <models dir> --strings <strings.json> --out <goldens dir>`
    writes one goldens JSON per tokenizer. The strings file is a JSON array of
    `{"id": "sNN", "text": "..."}`; `data/tokenizer_strings.json` holds the standard 24.
+Test models and goldens (WP1.1), output under `<dev>/` (`MODELPIPELINES_DEV_DIR` or `../.pipelines-dev`):
+
+- `make_test_models.py [--out DIR]` builds 4 tiny ONNX models (opset 17, IR 8) into
+  `<dev>/models/test` and prints their SHA-256.
+- `make_test_goldens.py [--models DIR] [--out FILE] [--seed 1234] [--batches 1,3,8,256]` runs them in
+  onnxruntime (CPU) and writes `<dev>/goldens/test_models/test_models.json`.
+
 3. `python -m pytest Tools/tests -q` runs the tests (offline; skips if files are absent).

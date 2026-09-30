@@ -1,0 +1,25 @@
+# Unreal build output
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+*.sln
+*.suo
+*.VC.db
+*.VC.opendb
+.vs/
+.idea/
+
+# Models and test data never go in git (Git LFS is set up for .onnx, but nothing is committed without the maintainer's OK)
+models/
+TestData/
+goldens/
+*.onnx
+*.onnx_data
+*.safetensors
+*.bin
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/

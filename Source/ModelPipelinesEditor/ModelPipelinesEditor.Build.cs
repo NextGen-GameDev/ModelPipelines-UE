@@ -9,6 +9,8 @@ public class ModelPipelinesEditor : ModuleRules
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "ModelPipelinesCore" });
-		PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd" });
+		PrivateDependencyModuleNames.AddRange(new string[] {
+			"UnrealEd", "NNE", "Tokenizers", "Json", "AssetRegistry", "AssetTools", "ToolMenus",
+			"ContentBrowser", "DesktopPlatform", "Slate", "SlateCore", "Projects" });
 	}
 }

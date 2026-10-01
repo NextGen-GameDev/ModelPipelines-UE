@@ -19,3 +19,20 @@ Test models and goldens (WP1.1), output under `<dev>/` (`MODELPIPELINES_DEV_DIR`
   onnxruntime (CPU) and writes `<dev>/goldens/test_models/test_models.json`.
 
 3. `python -m pytest Tools/tests -q` runs the tests (offline; skips if files are absent).
+
+Importer test data (WP2.1), output under `<dev>/`:
+
+- `fetch_reference_models.py [--force] [--only slug,slug]` resolves pinned revisions to full SHAs, checks each
+  model card says `apache-2.0` before downloading weights, exports ONNX (opset 17, single file) for the 4 reference
+  models into `<dev>/models/reference/<slug>/` (the repo's own files unchanged + `modelpipelines.json` + `model.onnx`),
+  runs a onnxruntime-vs-torch check (fails above 1e-3), and writes `<dev>/models/reference/manifest.json`.
+  HF cache goes to `<dev>/cache/hf`. Skips models whose `model.onnx` sha256 matches the manifest.
+- `make_import_test_data.py [--variant visible|hidden] [--out-models DIR] [--out-goldens FILE]` writes the 15 tiny
+  importer folders to `<out-models>/import_test/` and the expectations JSON
+  (`<dev>/goldens/import/import_expectations.json`), adding the reference cases when those folders exist. Reference
+  cases are cross-checked against transformers; a disagreement fails the script.
+
+`fetch_reference_models.py` also guarantees a `tokenizer.json` in text reference folders. A repo's own file is never
+overwritten; when a repo ships none (distilbert-sst2 has only `vocab.txt`), it is converted with
+`AutoTokenizer(use_fast=True).backend_tokenizer.save`, verified against the slow tokenizer on 6 strings (fails on any
+difference), and recorded in `manifest.json` as `tokenizer_json`. This also runs on reruns without `--force`.

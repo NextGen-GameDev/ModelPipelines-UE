@@ -407,8 +407,33 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 	FPipelineResult InitResult = CpuModel.IsValid() ? CpuModel->Initialize() : PrepareResult;
 	if (!CpuModel.IsValid() || !InitResult.bSuccess)
 	{
-		const FString Reason = InitResult.Message.IsEmpty() ? FString(TEXT("the model could not be created")) : InitResult.Message;
-		// The backend message may already carry the device prefix; keep it once.
+		FString Reason = InitResult.Message.IsEmpty() ? FString(TEXT("the model could not be created")) : InitResult.Message;
+		// The backend may wrap the device reason as "... (CPU: <reason>)"; use the text inside that parenthesis.
+		const int32 InnerStart = Reason.Find(TEXT("(CPU: "), ESearchCase::CaseSensitive);
+		if (InnerStart != INDEX_NONE)
+		{
+			const int32 TextStart = InnerStart + 6; // after "(CPU: "
+			int32 TextEnd = INDEX_NONE;
+			int32 Depth = 1;
+			for (int32 i = TextStart; i < Reason.Len(); ++i)
+			{
+				if (Reason[i] == TEXT('('))
+				{
+					++Depth;
+				}
+				else if (Reason[i] == TEXT(')') && --Depth == 0)
+				{
+					TextEnd = i;
+					break;
+				}
+			}
+			const FString Inner = (TextEnd == INDEX_NONE ? Reason.Mid(TextStart) : Reason.Mid(TextStart, TextEnd - TextStart)).TrimStartAndEnd();
+			if (!Inner.IsEmpty())
+			{
+				Reason = Inner;
+			}
+		}
+		// The (remaining) message may already carry the device prefix; keep it once.
 		const bool bHasPrefix = Reason.StartsWith(TEXT("CPU: "));
 		const FString Msg = bHasPrefix ? Reason : FString::Printf(TEXT("CPU: %s"), *Reason);
 		Report.DeviceChecks[CpuIndex].Message = Msg;

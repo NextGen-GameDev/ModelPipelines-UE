@@ -33,11 +33,23 @@ namespace UE::ModelPipelines::Editor
 		/** Handle of a deferred startup callback (only set while UToolMenus is not ready yet). */
 		static FDelegateHandle GPendingStartupHandle;
 
+		/** True when the clicked folder context allows creating assets: modifiable and at least one asset (not class) path. */
+		static bool CanImportInto(const UContentBrowserFolderContext* FolderContext)
+		{
+			return FolderContext && FolderContext->bCanBeModified && FolderContext->NumAssetPaths > 0;
+		}
+
+		/** Menu can-execute: the entry is disabled for read-only folders and class-only selections. */
+		static bool CanExecuteImport(const FToolMenuContext& Context)
+		{
+			return CanImportInto(Context.FindContext<UContentBrowserFolderContext>());
+		}
+
 		/** Menu action: clicked folder -> directory dialog -> import. Does nothing when there is no folder or the dialog is cancelled. */
 		static void ExecuteImport(const FToolMenuContext& Context)
 		{
 			const UContentBrowserFolderContext* FolderContext = Context.FindContext<UContentBrowserFolderContext>();
-			if (!FolderContext || FolderContext->GetSelectedPackagePaths().Num() == 0)
+			if (!CanImportInto(FolderContext) || FolderContext->GetSelectedPackagePaths().Num() == 0)
 			{
 				return;
 			}
@@ -77,12 +89,14 @@ namespace UE::ModelPipelines::Editor
 				return;
 			}
 			FToolMenuSection& Section = Menu->FindOrAddSection(ImportSectionName, LOCTEXT("SectionLabel", "Model Pipelines"));
+			FToolUIAction Action(FToolMenuExecuteAction::CreateStatic(&ExecuteImport));
+			Action.CanExecuteAction = FToolMenuCanExecuteAction::CreateStatic(&CanExecuteImport);
 			Section.AddEntry(FToolMenuEntry::InitMenuEntry(
 				ImportEntryName,
 				LOCTEXT("ImportLabel", "Import Hugging Face Model Folder..."),
 				LOCTEXT("ImportToolTip", "Import a folder with model.onnx, config.json and tokenizer/preprocessor files as a Model Pipelines package"),
 				FSlateIcon(),
-				FToolUIAction(FToolMenuExecuteAction::CreateStatic(&ExecuteImport))));
+				Action));
 		}
 	}
 
@@ -124,6 +138,13 @@ namespace UE::ModelPipelines::Editor
 		Options.bSave = bSaveOverride.Get(true);
 
 		FPipelineImportResult Result;
+		if (!IsInGameThread())
+		{
+			// FScopedSlowTask and the importer are game-thread only; touch nothing.
+			Result.Report.Add(EPipelineValidationSeverity::Error, EPipelineValidationCode::None,
+				TEXT("ImportFolderWithProgress must run on the game thread. Call it from the editor's game thread (e.g. via AsyncTask(ENamedThreads::GameThread, ...))."));
+			return Result;
+		}
 		{
 			FScopedSlowTask SlowTask(1.f, FText::Format(LOCTEXT("Importing", "Importing model folder {0}..."),
 				FText::FromString(FPaths::GetCleanFilename(SourceFolder))), bInteractive);

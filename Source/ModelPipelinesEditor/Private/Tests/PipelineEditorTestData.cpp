@@ -14,6 +14,9 @@
 #include "NNEModelData.h"
 #include "PipelineModelPackage.h"
 #include "PipelineModelImporter.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
 
 namespace UE::ModelPipelines::EditorTests
 {
@@ -87,6 +90,7 @@ namespace UE::ModelPipelines::EditorTests
 			UPackage* Transient = GetTransientPackage();
 			if (OldPackage != Transient)
 			{
+				FAssetRegistryModule::AssetDeleted(Obj);   // the importer registered it with AssetCreated
 				const FName Unique = MakeUniqueObjectName(Transient, Obj->GetClass(), Obj->GetFName());
 				Obj->Rename(*Unique.ToString(), Transient, REN_DontCreateRedirectors | REN_NonTransactional);
 			}

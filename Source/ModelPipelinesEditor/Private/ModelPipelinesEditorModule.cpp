@@ -2,7 +2,7 @@
 
 #include "ModelPipelinesEditorModule.h"
 
-#include "Misc/CoreMisc.h"
+#include "CoreGlobals.h"
 #include "Modules/ModuleManager.h"
 #include "PipelineImportMenu.h"
 

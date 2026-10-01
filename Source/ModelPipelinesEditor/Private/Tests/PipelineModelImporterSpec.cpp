@@ -507,7 +507,16 @@ void FPipelineModelImporterSpec::Define()
 			IFileManager::Get().DeleteDirectory(*D, false, true);
 		}
 		TempDirs.Reset();
-		IFileManager::Get().DeleteDirectory(*ContentDir(), false, true);
+		// Freshly saved files can stay open briefly (asset registry / directory watcher), so retry the removal.
+		bool bRemoved = !IFileManager::Get().DirectoryExists(*ContentDir());
+		for (int32 Try = 0; Try < 20 && !bRemoved; ++Try)
+		{
+			bRemoved = IFileManager::Get().DeleteDirectory(*ContentDir(), false, true);
+			if (!bRemoved) { FPlatformProcess::Sleep(0.05f); }
+		}
+		if (!bRemoved) { AddWarning(FString::Printf(TEXT("could not remove %s"), *ContentDir())); }
+		const FString TestsRoot = FPaths::ProjectContentDir() / TEXT("PipelinesTests");
+		IFileManager::Get().DeleteDirectory(*TestsRoot, false, false);   // only if empty
 	});
 
 	// ------------------------------------------------------------------------------------------------ acceptance 1

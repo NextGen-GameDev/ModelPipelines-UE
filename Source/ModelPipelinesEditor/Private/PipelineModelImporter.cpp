@@ -24,6 +24,9 @@ namespace PipelineModelImporterPrivate
 	using ESev = EPipelineValidationSeverity;
 	using ECode = EPipelineValidationCode;
 
+	/** Longest accepted long package name for either asset (FName asserts at NAME_SIZE = 1024; leave room for object paths). */
+	static constexpr int32 MaxLongPackageNameLen = 200;
+
 	/** Last path component of a folder path, trailing separators ignored. */
 	static FString FolderLeafOf(const FString& Folder)
 	{
@@ -165,11 +168,38 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 	if (Name.IsEmpty() || Name.Contains(TEXT("/")))
 	{
 		Report.Add(ESev::Error, ECode::InvalidDestination, FString::Printf(
-			TEXT("Asset name '%s' is not usable (empty or contains '/'). Pass an AssetName made of letters, digits and '_'."), *Name));
+			TEXT("Asset name '%s' is not usable (empty or contains '/'). Pass an AssetName made of letters, digits and '_'."), *Name.Left(MaxLongPackageNameLen)));
 		return Finish();
 	}
+	// Length first: every later step (FindObject, FindPackage, CreatePackage) builds an FName, which asserts on very long
+	// strings. Only string operations happen before this check.
 	FTarget PkgTarget = MakeTarget(Dest, Name);
 	FTarget ModelTarget = MakeTarget(Dest, Name + TEXT("_Model"));
+	if (PkgTarget.LongPackageName.Len() > MaxLongPackageNameLen || ModelTarget.LongPackageName.Len() > MaxLongPackageNameLen)
+	{
+		Report.Add(ESev::Error, ECode::InvalidDestination, FString::Printf(
+			TEXT("The asset path '%s...' is too long (%d characters; the limit is %d for '<DestinationPath>/<AssetName>_Model'). Use a shorter DestinationPath or AssetName."),
+			*ModelTarget.LongPackageName.Left(64), ModelTarget.LongPackageName.Len(), MaxLongPackageNameLen));
+		return Finish();
+	}
+	if (!Options.AssetName.IsEmpty())
+	{
+		// An explicit name is used as given, so it must be a valid object name ("None" is the null FName).
+		FText XNameReason;
+		if (Name.Equals(TEXT("None"), ESearchCase::IgnoreCase))
+		{
+			Report.Add(ESev::Error, ECode::InvalidDestination,
+				TEXT("AssetName 'None' is reserved by Unreal (it is the null name). Choose another AssetName."));
+			return Finish();
+		}
+		if (!FName::IsValidXName(Name, INVALID_OBJECTNAME_CHARACTERS, &XNameReason))
+		{
+			Report.Add(ESev::Error, ECode::InvalidDestination, FString::Printf(
+				TEXT("AssetName '%s' is not a valid object name (%s). Use letters, digits and '_' only, or leave AssetName empty to use the folder name."),
+				*Name, *XNameReason.ToString()));
+			return Finish();
+		}
+	}
 	bool bDestOk = true;
 	for (const FTarget* T : {&PkgTarget, &ModelTarget})
 	{
@@ -192,6 +222,25 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 	{
 		T->Loaded = FindObject<UObject>(nullptr, *T->ObjectPath);
 		T->bOnDisk = FPackageName::DoesPackageExist(T->LongPackageName);
+	}
+	// A package that is garbage (pending GC) would be handed back by CreatePackage; never reuse it.
+	{
+		bool bPendingGc = false;
+		for (const FTarget* T : {&PkgTarget, &ModelTarget})
+		{
+			UPackage* Found = FindPackage(nullptr, *T->LongPackageName);
+			if (Found && !IsValid(Found))
+			{
+				Report.Add(ESev::Error, ECode::AssetExists, FString::Printf(
+					TEXT("'%s' is still in memory as a deleted package waiting for garbage collection. Run garbage collection (or restart the editor), or choose another AssetName or DestinationPath."),
+					*T->LongPackageName));
+				bPendingGc = true;
+			}
+		}
+		if (bPendingGc)
+		{
+			return Finish();
+		}
 	}
 	UPipelineModelPackage* ExistingPkg = nullptr;
 	UNNEModelData* ExistingModel = nullptr;

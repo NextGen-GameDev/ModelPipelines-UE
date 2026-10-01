@@ -38,7 +38,7 @@ enum class EPipelineValidationCode : uint8
 	EmptyLabel = 7,
 	/** Error: image task and ImageWidth or ImageHeight outside 1..8192. */
 	InvalidImageSize = 8,
-	/** Error: image task and RescaleFactor <= 0 or any ImageStd component <= 0. */
+	/** Error: image task and RescaleFactor or any ImageStd component is <= 0, NaN or Inf. */
 	InvalidNormalization = 9,
 	/** Error: image task, ShortestEdgeCenterCrop and ResizeShortestEdge < max(ImageWidth, ImageHeight). */
 	InvalidResize = 10,

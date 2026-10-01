@@ -807,10 +807,7 @@ void FPipelineModelPackageSpec::Define()
 				FPlatformProcess::Sleep(0.01f);
 			}
 			TestEqual(TEXT("all 8 threads expected to finish within 60 s"), Done.GetValue(), 8);
-			if (Done.GetValue() == 8)
-			{
-				for (TFuture<void>& F : Futures) { F.Wait(); }
-			}
+			for (TFuture<void>& F : Futures) { F.Wait(); }   // always wait: the lambdas reference locals
 			TestEqual(TEXT("expected 0 mismatching results across 8000 calls"), Mismatches.GetValue(), 0);
 		});
 	});

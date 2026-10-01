@@ -188,6 +188,6 @@ public:
 	 * Settings only: loads neither model nor tokenizer. Appends messages (codes 2..13) to OutReport.
 	 * Returns true when this call added no Error. Does not modify the package.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Pipelines")
+	UFUNCTION(BlueprintCallable, BlueprintPure = false, Category = "Pipelines")
 	bool ValidateSettings(FPipelineValidationReport& OutReport) const;
 };

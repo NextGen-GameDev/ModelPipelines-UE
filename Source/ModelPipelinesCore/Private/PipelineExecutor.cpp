@@ -12,6 +12,7 @@
 #include "Misc/ScopeLock.h"
 #include "ModelPipelinesCoreModule.h"
 #include "PipelineLog.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "UObject/WeakObjectPtr.h"
 #include "UObject/WeakObjectPtrTemplates.h"
 
@@ -123,6 +124,7 @@ namespace
 	/** Game thread. Delivers one snapshot of the completion list, then reschedules if more arrived meanwhile. */
 	void DrainCompleted(const FStateWeakPtr& WeakState)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE_STR("ModelPipelines.Executor.Dispatch");
 		const FStatePtr State = WeakState.Pin();
 		if (!State.IsValid())
 		{
@@ -297,6 +299,7 @@ public:
 private:
 	static void Execute(FExecutorJob& Job)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE_STR("ModelPipelines.Executor.Job");
 		const double StartSeconds = FPlatformTime::Seconds();
 		const float QueueMs = (float)FMath::Max(0.0, (StartSeconds - Job.Info.EnqueueTimeSeconds) * 1000.0);
 

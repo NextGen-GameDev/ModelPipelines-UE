@@ -15,6 +15,7 @@
 #include "NNETypes.h"
 #include "PipelineLog.h"
 #include "PipelineOnnxCheck.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include <atomic>
 
@@ -147,6 +148,7 @@ namespace
 
 		virtual FPipelineResult Initialize() override
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE_STR("ModelPipelines.Initialize");
 			// Fast path: the result is immutable once published.
 			if (bInitDone.load(std::memory_order_acquire))
 			{
@@ -200,6 +202,7 @@ namespace
 
 		virtual FPipelineResult Run(TConstArrayView<FPipelineTensor> Inputs, TArray<FPipelineTensor>& OutOutputs) override
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE_STR("ModelPipelines.Run");
 			OutOutputs.Reset();
 
 			const FPipelineResult Init = Initialize();
@@ -622,6 +625,7 @@ bool FPipelineNNEBackend::IsDeviceAvailable(EPipelineDevice Device) const
 
 TSharedPtr<IPipelineModel> FPipelineNNEBackend::PrepareModel(UNNEModelData* ModelData, EPipelineDevice Device, FPipelineResult& OutResult)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE_STR("ModelPipelines.PrepareModel");
 	using namespace UE::ModelPipelines::Private;
 
 	if (!ModelData)

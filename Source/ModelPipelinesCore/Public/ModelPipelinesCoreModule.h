@@ -15,6 +15,12 @@ public:
 	/** FModuleManager::LoadModuleChecked. Any thread once the module has been loaded on the game thread. */
 	static FModelPipelinesCoreModule& Get();
 
+	/**
+	 * The loaded module, or nullptr when it is not loaded or its ShutdownModule has started. Never loads the module.
+	 * Any thread.
+	 */
+	static FModelPipelinesCoreModule* TryGet();
+
 	/** The executor every inference goes through. Valid between StartupModule and ShutdownModule. */
 	FPipelineExecutor& GetExecutor();
 

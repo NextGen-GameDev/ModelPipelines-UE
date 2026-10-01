@@ -87,7 +87,7 @@ def test_license_normalization():
     assert m.normalize_license("MIT") == "MIT"
     assert m.normalize_license("'bsd-3-clause'") == "BSD-3-Clause"
     assert m.normalize_license('"bsd-2-clause"') == "BSD-2-Clause"
-    assert m.normalize_license("gpl-3.0") == ""
+    assert m.normalize_license("gpl-3.0") == "gpl-3.0"
     assert m.normalize_license(None) == ""
 
 
@@ -223,3 +223,42 @@ def test_reference_text_folders_have_loadable_tokenizer_json(slug):
     assert os.path.isfile(path), "missing tokenizer.json in " + slug
     from tokenizers import Tokenizer
     assert Tokenizer.from_file(path).get_vocab_size() > 1000
+
+
+def test_license_unknown_kept_as_written():
+    assert m.normalize_license("other") == "other"
+    assert m.normalize_license('"cc-by-nc-4.0"') == "cc-by-nc-4.0"
+    assert m.normalize_license("'Apache-2.0'") == "Apache-2.0"
+    assert m.normalize_license("") == ""
+
+
+def test_license_per_field_fallback():
+    readme = "---\nlicense: mit\n---\n"
+    lic = m.resolve_license({"license": {"spdx_id": "  ", "source_url": "u", "attribution": "a"}}, readme)
+    assert lic == {"spdx_id": "MIT", "source_url": "u", "attribution": "a"}
+    lic = m.resolve_license({"license": {"source_url": "u"}}, readme)
+    assert lic == {"spdx_id": "MIT", "source_url": "u", "attribution": ""}
+    lic = m.resolve_license({"license": {"spdx_id": "BSD-3-Clause"}}, readme)
+    assert lic["spdx_id"] == "BSD-3-Clause" and lic["source_url"] == ""
+    assert m.resolve_license(None, readme) == {"spdx_id": "MIT", "source_url": "", "attribution": ""}
+    assert m.resolve_license({"license": {"spdx_id": ""}}, None)["spdx_id"] == ""
+
+
+def test_preferred_device_case_insensitive():
+    assert m.resolve_device({"preferred_device": "gpu"}) == "GPU"
+    assert m.resolve_device({"preferred_device": "Cpu"}) == "CPU"
+    assert m.resolve_device({"preferred_device": "AUTO"}) == "Auto"
+    assert m.resolve_device({}) == "Auto"
+    assert m.resolve_device(None) == "Auto"
+    with pytest.raises(ValueError):
+        m.resolve_device({"preferred_device": "tpu"})
+
+
+def test_large_size_without_crop_pct_follows_other_rules():
+    r = m.image_preprocess({"size": {"shortest_edge": 512}, "do_center_crop": True, "crop_size": 448})
+    assert r["resize_mode"] == "ShortestEdgeCenterCrop" and r["resize_shortest_edge"] == 512
+    assert (r["image_width"], r["image_height"]) == (448, 448)
+    r = m.image_preprocess({"size": 400})
+    assert r["resize_mode"] == "Stretch" and (r["image_width"], r["image_height"]) == (400, 400)
+    r = m.image_preprocess({"size": 384, "crop_pct": 0.9})
+    assert r["resize_mode"] == "Stretch" and r["resize_shortest_edge"] == 0

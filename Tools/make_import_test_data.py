@@ -35,12 +35,42 @@ REFERENCE_SLUGS = ["all-MiniLM-L6-v2", "distilbert-sst2", "resnet-50", "rtdetr_r
 # ----------------------------------------------------------------------------------------------------------------
 
 def normalize_license(value):
-    """README front-matter license id -> SPDX id ('' when unknown/missing)."""
+    """README front-matter license id -> SPDX id. Known ids are mapped; unknown values are kept as written
+    (quotes stripped); '' only when missing."""
     if not value:
         return ""
-    v = str(value).strip().strip("'\"").strip().lower()
+    v = str(value).strip().strip("'\"").strip()
     return {"apache-2.0": "Apache-2.0", "mit": "MIT", "bsd-2-clause": "BSD-2-Clause",
-            "bsd-3-clause": "BSD-3-Clause"}.get(v, "")
+            "bsd-3-clause": "BSD-3-Clause"}.get(v.lower(), v)
+
+
+def resolve_license(sidecar, readme_text):
+    """Per-field license: spdx_id from the sidecar if non-empty after trimming, else README front matter;
+    source_url and attribution only from the sidecar."""
+    lic = {"spdx_id": "", "source_url": "", "attribution": ""}
+    sc = sidecar.get("license") if isinstance(sidecar, dict) else None
+    if isinstance(sc, dict):
+        for k in lic:
+            v = sc.get(k)
+            if isinstance(v, str):
+                lic[k] = v
+    if not lic["spdx_id"].strip():
+        lic["spdx_id"] = ""
+        if readme_text is not None:
+            lic["spdx_id"] = normalize_license(readme_license(readme_text))
+    return lic
+
+
+DEVICES = {"auto": "Auto", "cpu": "CPU", "gpu": "GPU"}
+
+
+def resolve_device(sidecar):
+    v = sidecar.get("preferred_device") if isinstance(sidecar, dict) else None
+    if not isinstance(v, str):
+        return "Auto"
+    if v.strip().lower() not in DEVICES:
+        raise ValueError("unknown preferred_device: " + v)
+    return DEVICES[v.strip().lower()]
 
 
 def readme_license(text):
@@ -107,11 +137,10 @@ def image_preprocess(pre):
         elif isinstance(size, int) and not isinstance(size, bool):
             shortest = size
         crop = pre.get("crop_size")
-        if shortest is not None and "crop_pct" in pre and shortest < 384:
-            out["resize_mode"] = "ShortestEdgeCenterCrop"
-            out["resize_shortest_edge"] = int(shortest / pre["crop_pct"])
-            out["image_width"] = out["image_height"] = shortest
-        elif shortest is not None and shortest >= 384:
+        if shortest is not None and "crop_pct" in pre:
+            if shortest < 384:
+                out["resize_mode"] = "ShortestEdgeCenterCrop"
+                out["resize_shortest_edge"] = int(shortest / pre["crop_pct"])
             out["image_width"] = out["image_height"] = shortest
         elif pre.get("do_center_crop") and crop is not None and shortest is not None:
             out["resize_mode"] = "ShortestEdgeCenterCrop"
@@ -616,20 +645,13 @@ def derive_full(folder, task_override="None"):
         img = image_preprocess(None)
     pp.update(img)
     pp["score_activation"] = score_activation(task, config)
-    lic = {"spdx_id": "", "source_url": "", "attribution": ""}
-    if sidecar and isinstance(sidecar.get("license"), dict):
-        for k in lic:
-            v = sidecar["license"].get(k)
-            if isinstance(v, str):
-                lic[k] = v
-    else:
-        readme = os.path.join(folder, "README.md")
-        if os.path.isfile(readme):
-            with open(readme, "r", encoding="utf-8") as f:
-                lic["spdx_id"] = normalize_license(readme_license(f.read()))
-    device = "Auto"
-    if sidecar and isinstance(sidecar.get("preferred_device"), str):
-        device = sidecar["preferred_device"]
+    readme_text = None
+    readme = os.path.join(folder, "README.md")
+    if os.path.isfile(readme):
+        with open(readme, "r", encoding="utf-8") as f:
+            readme_text = f.read()
+    lic = resolve_license(sidecar, readme_text)
+    device = resolve_device(sidecar)
     return {"task": task, "task_source": source, "model_file": model_file, "labels": labels, "preprocess": pp,
             "license": lic, "preferred_device": device, "onnx": onnx_block(os.path.join(folder, model_file))}
 

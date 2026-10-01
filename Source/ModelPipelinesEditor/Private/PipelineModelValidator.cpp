@@ -327,6 +327,12 @@ namespace PipelineModelValidatorPrivate
 
 FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPackage* Package, const FPipelineValidateOptions& Options)
 {
+	if (!IsInGameThread())
+	{
+		FPipelineValidationReport Report;
+		Report.Add(EPipelineValidationSeverity::Error, EPipelineValidationCode::None, TEXT("ValidatePipelineModelPackage must run on the game thread"));
+		return Report;
+	}
 	return ValidatePipelineModelPackage(Package, Options, FModelPipelinesCoreModule::Get().GetDefaultBackend());
 }
 
@@ -336,6 +342,11 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 	using namespace PipelineModelValidatorPrivate;
 
 	FPipelineValidationReport Report;
+	if (!IsInGameThread())
+	{
+		Report.Add(ESev::Error, ECode::None, TEXT("ValidatePipelineModelPackage must run on the game thread"));
+		return Report;
+	}
 
 	// Step 1: package and settings.
 	if (Package == nullptr)
@@ -397,7 +408,9 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 	if (!CpuModel.IsValid() || !InitResult.bSuccess)
 	{
 		const FString Reason = InitResult.Message.IsEmpty() ? FString(TEXT("the model could not be created")) : InitResult.Message;
-		const FString Msg = FString::Printf(TEXT("CPU: %s"), *Reason);
+		// The backend message may already carry the device prefix; keep it once.
+		const bool bHasPrefix = Reason.StartsWith(TEXT("CPU: "));
+		const FString Msg = bHasPrefix ? Reason : FString::Printf(TEXT("CPU: %s"), *Reason);
 		Report.DeviceChecks[CpuIndex].Message = Msg;
 		Report.Add(ESev::Error, ECode::ModelCreateFailed, Msg);
 		return Report;
@@ -448,10 +461,17 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 			const FPipelineResult GpuInit = GpuModel.IsValid() ? GpuModel->Initialize() : GpuPrepare;
 			if (!GpuModel.IsValid() || !GpuInit.bSuccess || GpuModel->GetDevice() != EPipelineDevice::GPU)
 			{
-				FString Msg = TEXT("GPU: could not create the model; it runs on CPU");
-				if (!GpuInit.bSuccess && !GpuInit.Message.IsEmpty())
+				FString Msg;
+				if (GpuModel.IsValid() && GpuInit.bSuccess)
 				{
-					Msg += FString::Printf(TEXT(" (%s)"), *GpuInit.Message);
+					// Created, but the runtime placed it on the CPU.
+					const FString Reason = GpuInit.Message.IsEmpty() ? FString(TEXT("the GPU runtime fell back to the CPU")) : GpuInit.Message;
+					Msg = FString::Printf(TEXT("GPU: could not create the model; it runs on CPU (%s)"), *Reason);
+				}
+				else
+				{
+					const FString Reason = GpuInit.Message.IsEmpty() ? FString(TEXT("the model could not be created")) : GpuInit.Message;
+					Msg = FString::Printf(TEXT("GPU: could not create the model (%s)"), *Reason);
 				}
 				Report.DeviceChecks[GpuIndex].Message = Msg;
 				Report.Add(ESev::Warning, ECode::ModelCreateFailed, Msg);

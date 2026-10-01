@@ -9,6 +9,11 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/PlatformMisc.h"
+#include "UObject/Package.h"
+#include "UObject/UObjectGlobals.h"
+#include "NNEModelData.h"
+#include "PipelineModelPackage.h"
+#include "PipelineModelImporter.h"
 
 namespace UE::ModelPipelines::EditorTests
 {
@@ -68,6 +73,39 @@ namespace UE::ModelPipelines::EditorTests
 	bool IsGpuRequired()
 	{
 		return FPlatformMisc::GetEnvironmentVariable(TEXT("MODELPIPELINES_REQUIRE_GPU")) == TEXT("1");
+	}
+
+	namespace
+	{
+		void DiscardOne(UObject* Obj)
+		{
+			if (!Obj || !IsValid(Obj))
+			{
+				return;
+			}
+			UPackage* OldPackage = Obj->GetOutermost();
+			UPackage* Transient = GetTransientPackage();
+			if (OldPackage != Transient)
+			{
+				const FName Unique = MakeUniqueObjectName(Transient, Obj->GetClass(), Obj->GetFName());
+				Obj->Rename(*Unique.ToString(), Transient, REN_DontCreateRedirectors | REN_NonTransactional);
+			}
+			Obj->ClearFlags(RF_Public | RF_Standalone);
+			Obj->MarkAsGarbage();
+			if (OldPackage && OldPackage != Transient && IsValid(OldPackage))
+			{
+				OldPackage->SetDirtyFlag(false);
+				OldPackage->ClearFlags(RF_Public | RF_Standalone);
+				OldPackage->MarkAsGarbage();
+			}
+		}
+	}
+
+	void DiscardImported(const FPipelineImportResult& Result)
+	{
+		// Both objects are renamed out of their content packages regardless of order.
+		DiscardOne(Result.Package.Get());
+		DiscardOne(Result.Model.Get());
 	}
 }
 

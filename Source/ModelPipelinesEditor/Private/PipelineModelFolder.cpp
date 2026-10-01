@@ -847,6 +847,8 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 	}
 	{
 		const FString Candidates[] = {Ctx.Folder + TEXT("/model.onnx"), Ctx.Folder + TEXT("/onnx/model.onnx")};
+		// C14 rule 1 is literal: the first candidate that exists is THE model file (onnx/model.onnx only when
+		// model.onnx does not exist); an empty one is an error even if the other candidate exists.
 		FString EmptyFile;
 		for (const FString& C : Candidates)
 		{
@@ -855,12 +857,12 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 				if (FM.FileSize(*C) > 0)
 				{
 					OutInfo.ModelFile = C;
-					break;
 				}
-				if (EmptyFile.IsEmpty())
+				else
 				{
 					EmptyFile = C;
 				}
+				break;
 			}
 		}
 		if (OutInfo.ModelFile.IsEmpty())

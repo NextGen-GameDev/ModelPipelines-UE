@@ -241,23 +241,40 @@ def _vi(name, elem, shape):
     return helper.make_tensor_value_info(name, elem, shape)
 
 
-def build_text_embedding(path, vocab, hidden, seed=11):
+def build_text_embedding(path, vocab, hidden, seed=11, pos_rows=None, pos_seed=21):
+    """pos_rows=None: the plain tiny model. Else adds a position-embedding Gather (Range(0, seq_len) into a
+    pos_rows-row table) that is added to the token embedding."""
     onnx, T, h, nh = _onnx()
     rng = np.random.RandomState(seed)
     table = rng.uniform(-1, 1, size=(vocab, hidden)).astype(np.float32)
     inits = [nh.from_array(table, "table"), nh.from_array(np.array([2], dtype=np.int64), "ax2"),
              nh.from_array(np.array(0.0, dtype=np.float32), "zero")]
-    nodes = [
-        h.make_node("Gather", ["table", "input_ids"], ["emb"], axis=0),
+    nodes = [h.make_node("Gather", ["table", "input_ids"], ["emb"], axis=0)]
+    if pos_rows is not None:
+        pos = np.random.RandomState(pos_seed).uniform(-1, 1, size=(pos_rows, hidden)).astype(np.float32)
+        inits += [nh.from_array(pos, "pos_table"), nh.from_array(np.array(1, dtype=np.int64), "one_idx"),
+                  nh.from_array(np.array(0, dtype=np.int64), "range_start"),
+                  nh.from_array(np.array(1, dtype=np.int64), "range_delta")]
+        nodes += [
+            h.make_node("Shape", ["input_ids"], ["ids_shape"]),
+            h.make_node("Gather", ["ids_shape", "one_idx"], ["seq_len"], axis=0),
+            h.make_node("Range", ["range_start", "seq_len", "range_delta"], ["pos_ids"]),
+            h.make_node("Gather", ["pos_table", "pos_ids"], ["pos_emb"], axis=0),
+            h.make_node("Add", ["emb", "pos_emb"], ["emb_pos"]),
+        ]
+        emb = "emb_pos"
+    else:
+        emb = "emb"
+    nodes += [
         h.make_node("Cast", ["attention_mask"], ["mask_f"], to=T.FLOAT),
         h.make_node("Unsqueeze", ["mask_f", "ax2"], ["mask3"]),
-        h.make_node("Mul", ["emb", "mask3"], ["masked"]),
+        h.make_node("Mul", [emb, "mask3"], ["masked"]),
         h.make_node("Cast", ["token_type_ids"], ["tt_f"], to=T.FLOAT),
         h.make_node("Unsqueeze", ["tt_f", "ax2"], ["tt3"]),
         h.make_node("Mul", ["tt3", "zero"], ["tt0"]),
         h.make_node("Add", ["masked", "tt0"], ["last_hidden_state"]),
     ]
-    g = h.make_graph(nodes, "tiny_text_embedding",
+    g = h.make_graph(nodes, "tiny_text_embedding" if pos_rows is None else "tiny_text_embedding_positions",
                      [_vi(n, T.INT64, ["batch", "sequence"]) for n in ("input_ids", "attention_mask",
                                                                         "token_type_ids")],
                      [_vi("last_hidden_state", T.FLOAT, ["batch", "sequence", hidden])], initializer=inits)
@@ -349,7 +366,8 @@ def params(variant):
             img_h=32, img_w=32, img_labels=["cat", "café", "日本", "dog"], crop_pct=0.875, img_size=32,
             img_mean=[0.5, 0.4, 0.3], img_std=[0.2, 0.25, 0.3],
             det_h=32, det_w=32, det_q=5, det_labels=["person", "crate"],
-            two_labels=["NEGATIVE", "POSITIVE"], mismatch_labels=["yes", "no"])
+            two_labels=["NEGATIVE", "POSITIVE"], mismatch_labels=["yes", "no"],
+            small_vocab_rows=30000, pos_rows=32, pos_sbert=64)
     return dict(
         emb_hidden=6, emb_tok="t5-small", cls_tok="gpt2",
         cls_labels=["sunny", "rain", "ñandú", "snow", "fog"], cls_max_pos=96,
@@ -357,7 +375,8 @@ def params(variant):
         img_h=48, img_w=48, img_labels=["sky", "sea", "лес", "sand"], crop_pct=0.9, img_size=48,
         img_mean=[0.45, 0.5, 0.55], img_std=[0.25, 0.2, 0.15],
         det_h=48, det_w=40, det_q=7, det_labels=["drone", "kite", "balloon"],
-        two_labels=["BAD", "GOOD"], mismatch_labels=["lo", "mid", "hi", "top"])
+        two_labels=["BAD", "GOOD"], mismatch_labels=["lo", "mid", "hi", "top"],
+        small_vocab_rows=-1000, pos_rows=16, pos_sbert=48)
 
 
 def jbytes(obj):
@@ -421,10 +440,31 @@ class Builder:
         build_image_classification(os.path.join(d, rel), p["img_h"], p["img_w"], len(p["img_labels"]))
         self.models_seen[os.path.basename(d)] = ("image", None)
 
-    def emb_model(self, d):
+    def emb_model(self, d, vocab=None, pos_rows=None):
         p = self.p
-        build_text_embedding(os.path.join(d, "model.onnx"), tokenizer_vocab(self.tok[p["emb_tok"]]), p["emb_hidden"])
+        build_text_embedding(os.path.join(d, "model.onnx"), vocab or tokenizer_vocab(self.tok[p["emb_tok"]]),
+                             p["emb_hidden"], pos_rows=pos_rows)
         self.models_seen[os.path.basename(d)] = ("text_emb", p["emb_tok"])
+
+    def emb_folder_files(self, d, case_id, sbert, max_pos):
+        p = self.p
+        cfg = {"architectures": ["BertModel"], "model_type": "bert"}
+        if max_pos is not None:
+            cfg["max_position_embeddings"] = max_pos
+        self.write(d, "config.json", jbytes(cfg))
+        self.copy_tokenizer(d, p["emb_tok"])
+        self.write(d, "tokenizer_config.json", jbytes({"model_max_length": 512}))
+        mods = [{"idx": 0, "name": "0", "path": "", "type": "sentence_transformers.models.Transformer"},
+                {"idx": 1, "name": "1", "path": "1_Pooling", "type": "sentence_transformers.models.Pooling"}]
+        if p["emb_normalize"]:
+            mods.append({"idx": 2, "name": "2", "path": "2_Normalize",
+                         "type": "sentence_transformers.models.Normalize"})
+        self.write(d, "modules.json", jbytes(mods))
+        self.write(d, "1_Pooling/config.json", jbytes({
+            "word_embedding_dimension": p["emb_hidden"], "pooling_mode_cls_token": p["emb_pool_cls"],
+            "pooling_mode_mean_tokens": not p["emb_pool_cls"]}))
+        self.write(d, "sentence_bert_config.json", jbytes({"max_seq_length": sbert}))
+        self.write(d, "modelpipelines.json", jbytes(full_license(case_id)))
 
     def cls_config(self, labels, **extra):
         c = {"architectures": ["DistilBertForSequenceClassification"], "model_type": "distilbert"}
@@ -591,6 +631,21 @@ class Builder:
             "id2label": {"0": "a", "2": "b", "3": "c"}}))
         self.add("bad_id2label", "parse_error", errors=["InvalidLabels"])
 
+        # small_vocab: embedding table smaller than the tokenizer vocab (worst-case id is out of range)
+        d = self.folder("small_vocab")
+        rows = p["small_vocab_rows"]
+        if rows < 0:
+            rows += tokenizer_vocab(self.tok[p["emb_tok"]])
+        self.emb_model(d, vocab=rows)
+        self.emb_folder_files(d, "small_vocab", p["emb_sbert"], p["emb_max_pos"])
+        self.add("small_vocab", "validation_error", errors=["SmokeRunFailed"])
+
+        # short_positions: position table shorter than MaxTokens (no max_position_embeddings in config.json)
+        d = self.folder("short_positions")
+        self.emb_model(d, pos_rows=p["pos_rows"])
+        self.emb_folder_files(d, "short_positions", p["pos_sbert"], None)
+        self.add("short_positions", "validation_error", errors=["SmokeRunFailed"])
+
 
 # ----------------------------------------------------------------------------------------------------------------
 # Expectations derived from files
@@ -715,6 +770,60 @@ def check_tiny_models(builder):
                 raise SystemExit("FAIL: %s output %s shape %s != %s" % (case_id, d["name"], o.shape, want))
 
 
+def _text_feed(sess, ids):
+    feed = {"input_ids": ids, "attention_mask": np.ones_like(ids), "token_type_ids": np.zeros_like(ids)}
+    return {i.name: feed[i.name] for i in sess.get_inputs()}
+
+
+def worst_case_run(model_path, tok_path, max_tokens):
+    """Hello world (specials on) and the worst case ([1, max_tokens] of the highest tokenizer id) on ORT CPU.
+    Returns (hello_ok, worst_ok, worst_error_text)."""
+    import onnxruntime as ort
+    from tokenizers import Tokenizer
+    tok = Tokenizer.from_file(tok_path)
+    sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+    hello = np.array([tok.encode("Hello world", add_special_tokens=True).ids], dtype=np.int64)
+    hello_ok = True
+    try:
+        sess.run(None, _text_feed(sess, hello))
+    except Exception:  # noqa: BLE001
+        hello_ok = False
+    worst = np.full((1, max_tokens), tok.get_vocab_size(with_added_tokens=True) - 1, dtype=np.int64)
+    try:
+        sess.run(None, _text_feed(sess, worst))
+        return hello_ok, True, ""
+    except Exception as e:  # noqa: BLE001
+        return hello_ok, False, str(e).splitlines()[0][:160]
+
+
+def check_worst_cases(builder, records):
+    """small_vocab and short_positions: Hello world passes, worst case raises an ORT error. Fails loudly."""
+    for case_id in ("small_vocab", "short_positions"):
+        rec = next(r for r in records if r["id"] == case_id)
+        mp = os.path.join(builder.root, case_id, "model.onnx")
+        hello_ok, worst_ok, err = worst_case_run(mp, builder.tok[builder.p["emb_tok"]], rec["preprocess"]["max_tokens"])
+        print("  worst-case self-check %s: hello_ok=%s worst_ok=%s max_tokens=%d %s" % (
+            case_id, hello_ok, worst_ok, rec["preprocess"]["max_tokens"], err))
+        if not hello_ok or worst_ok:
+            raise SystemExit("FAIL: %s must pass Hello world and fail the worst case" % case_id)
+
+
+def check_reference_worst_cases(models_root, records):
+    for slug in ("all-MiniLM-L6-v2", "distilbert-sst2"):
+        rec = next((r for r in records if r["id"] == slug), None)
+        folder = os.path.join(models_root, "reference", slug)
+        if rec is None:
+            print("  reference worst case %s: skipped (folder missing)" % slug)
+            continue
+        hello_ok, worst_ok, err = worst_case_run(os.path.join(folder, rec["model_file"]),
+                                                 os.path.join(folder, "tokenizer.json"),
+                                                 rec["preprocess"]["max_tokens"])
+        print("  reference worst case %s: hello_ok=%s worst_ok=%s max_tokens=%d %s" % (
+            slug, hello_ok, worst_ok, rec["preprocess"]["max_tokens"], err))
+        if not worst_ok:
+            print("  FINDING: reference model %s fails the worst case on ORT" % slug)
+
+
 # ----------------------------------------------------------------------------------------------------------------
 # Reference cases and transformers cross-check
 # ----------------------------------------------------------------------------------------------------------------
@@ -804,8 +913,10 @@ def main():
         else:
             records.append(case_record(c["id"], rel, False, c["task_override"], c["expect"], c["errors"],
                                        c["warnings"], derive_full(folder, c["task_override"])))
+    check_worst_cases(b, records)
     models_root = os.path.join(dev, "models")
     records += reference_cases(models_root)
+    check_reference_worst_cases(models_root, records)
     import onnx
     import onnxruntime
     import transformers

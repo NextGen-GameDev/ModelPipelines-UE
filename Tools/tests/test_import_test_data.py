@@ -262,3 +262,78 @@ def test_large_size_without_crop_pct_follows_other_rules():
     assert r["resize_mode"] == "Stretch" and (r["image_width"], r["image_height"]) == (400, 400)
     r = m.image_preprocess({"size": 384, "crop_pct": 0.9})
     assert r["resize_mode"] == "Stretch" and r["resize_shortest_edge"] == 0
+
+
+# ---- WP3.6b worst-case cases ----------------------------------------------------------------------------------------
+
+def _gather_rows(model_path, init_name):
+    import onnx
+    mdl = onnx.load(model_path)
+    for i in mdl.graph.initializer:
+        if i.name == init_name:
+            return list(i.dims)[0]
+    raise AssertionError("no initializer " + init_name)
+
+
+def _check_worst_case_folders(models_root, goldens_path, variant):
+    with open(goldens_path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
+    by_id = {c["id"]: c for c in doc["cases"]}
+    emb = by_id["tiny_text_embedding"]
+    tok_name = "bert-base-uncased" if variant == "visible" else "t5-small"
+    tok = os.path.join(_paths.dev_dir(), "models", "tokenizers", tok_name, "tokenizer.json")
+    vocab = m.tokenizer_vocab(tok)
+    rows = {"small_vocab": 30000 if variant == "visible" else vocab - 1000,
+            "short_positions": None}
+    pos_rows = 32 if variant == "visible" else 16
+    max_tokens = 64 if variant == "visible" else 48
+    for case_id in ("small_vocab", "short_positions"):
+        c = by_id[case_id]
+        assert c["expect"] == "validation_error" and c["error_codes"] == ["SmokeRunFailed"]
+        assert c["warning_codes"] == [] and c["task"] == "TextEmbedding"
+        assert c["task_source"] == "modules.json"
+        assert c["onnx"] == emb["onnx"]
+        assert c["license"] == {"spdx_id": "Apache-2.0", "source_url": "https://example.invalid/" + case_id,
+                                "attribution": "ModelPipelines test data"}
+        folder = os.path.join(models_root, "import_test", case_id)
+        assert os.path.isdir(folder)
+        mp = os.path.join(folder, "model.onnx")
+        assert _gather_rows(mp, "table") == (rows[case_id] or vocab)
+        hello_ok, worst_ok, _ = m.worst_case_run(mp, tok, c["preprocess"]["max_tokens"])
+        assert hello_ok and not worst_ok, case_id
+    assert by_id["small_vocab"]["preprocess"]["max_tokens"] == (64 if variant == "visible" else 32)
+    sp = by_id["short_positions"]
+    assert sp["preprocess"]["max_tokens"] == max_tokens
+    assert _gather_rows(os.path.join(models_root, "import_test", "short_positions", "model.onnx"),
+                        "pos_table") == pos_rows
+    with open(os.path.join(models_root, "import_test", "short_positions", "config.json"), encoding="utf-8") as f:
+        assert "max_position_embeddings" not in json.load(f)
+
+
+def test_worst_case_cases_visible(doc):
+    models_root = doc.get("import_root", doc["models_root"])
+    _check_worst_case_folders(models_root, GOLDEN, "visible")
+
+
+def test_worst_case_cases_hidden_variant(tmp_path):
+    import subprocess
+    out = tmp_path / "models"
+    gold = tmp_path / "import_expectations.json"
+    r = subprocess.run([sys.executable, os.path.join(TOOLS, "make_import_test_data.py"), "--variant", "hidden",
+                        "--out-models", str(out), "--out-goldens", str(gold)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if "NEEDS:" in (r.stderr + r.stdout):
+        pytest.skip("hidden tokenizers missing")
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    _check_worst_case_folders(str(out), str(gold), "hidden")
+
+
+@pytest.mark.parametrize("slug", ["all-MiniLM-L6-v2", "distilbert-sst2"])
+def test_reference_text_models_pass_worst_case(doc, slug):
+    folder = os.path.join(_paths.dev_dir(), "models", "reference", slug)
+    c = next((c for c in doc["cases"] if c["id"] == slug), None)
+    if c is None:
+        pytest.skip("run fetch_reference_models.py first")
+    hello_ok, worst_ok, err = m.worst_case_run(os.path.join(folder, c["model_file"]),
+                                               os.path.join(folder, "tokenizer.json"), c["preprocess"]["max_tokens"])
+    assert hello_ok and worst_ok, err

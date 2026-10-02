@@ -27,10 +27,13 @@ Importer test data (WP2.1), output under `<dev>/`:
   models into `<dev>/models/reference/<slug>/` (the repo's own files unchanged + `modelpipelines.json` + `model.onnx`),
   runs a onnxruntime-vs-torch check (fails above 1e-3), and writes `<dev>/models/reference/manifest.json`.
   HF cache goes to `<dev>/cache/hf`. Skips models whose `model.onnx` sha256 matches the manifest.
-- `make_import_test_data.py [--variant visible|hidden] [--out-models DIR] [--out-goldens FILE]` writes the 15 tiny
+- `make_import_test_data.py [--variant visible|hidden] [--out-models DIR] [--out-goldens FILE]` writes the 17 tiny
   importer folders to `<out-models>/import_test/` and the expectations JSON
   (`<dev>/goldens/import/import_expectations.json`), adding the reference cases when those folders exist. Reference
   cases are cross-checked against transformers; a disagreement fails the script.
+  Worst-case cases (WP3.6b): `small_vocab` (Gather table 30000 rows, hidden: vocab-1000) and `short_positions`
+  (position table 32 rows, hidden 16; MaxTokens 64, hidden 48) pass a Hello world run but fail the worst case
+  (`SmokeRunFailed`); the script checks this on onnxruntime and also runs the worst case on the two reference text models.
 
 `fetch_reference_models.py` also guarantees a `tokenizer.json` in text reference folders. A repo's own file is never
 overwritten; when a repo ships none (distilbert-sst2 has only `vocab.txt`), it is converted with

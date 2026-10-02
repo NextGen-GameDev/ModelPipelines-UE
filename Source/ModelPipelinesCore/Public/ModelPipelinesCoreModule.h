@@ -30,10 +30,13 @@ public:
 	/** Creates the executor and the default backend. */
 	virtual void StartupModule() override;
 
-	/** Calls GetExecutor().Shutdown() before destroying anything. */
+	/**
+	 * Clears the FPipelineExecutor::TryGetShared() slot, then calls GetExecutor().Shutdown() before releasing anything.
+	 * Background holders of a TryGetShared() reference may outlive this call; the executor then dies with them.
+	 */
 	virtual void ShutdownModule() override;
 
 private:
-	TUniquePtr<FPipelineExecutor> Executor;
+	TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> Executor;
 	TUniquePtr<FPipelineNNEBackend> DefaultBackend;
 };

@@ -84,7 +84,11 @@ public:
 	/** Starts one worker thread named "ModelPipelinesExecutor". */
 	FPipelineExecutor();
 
-	/** Calls Shutdown(). Must not be called from a callback of this executor or from the worker thread. */
+	/**
+	 * Calls Shutdown(). Must not be called from a callback of this executor or from the worker thread. May run on any
+	 * other thread (e.g. a task worker dropping the last TryGetShared() reference after the module shut it down): once
+	 * Shutdown() has run it only frees memory and never touches the game thread.
+	 */
 	~FPipelineExecutor();
 
 	FPipelineExecutor(const FPipelineExecutor&) = delete;
@@ -92,6 +96,10 @@ public:
 
 	/** The module's instance (FModelPipelinesCoreModule::Get().GetExecutor()). Any thread once the module is loaded. */
 	static FPipelineExecutor& Get();
+
+	/** Any thread. The module's executor, or null before StartupModule / after ShutdownModule began.
+	    The returned pointer keeps the object alive; after Shutdown(), Enqueue returns 0. */
+	static TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> TryGetShared();
 
 	/**
 	 * Any thread. Never waits for inference (only a short lock). Returns an id > 0 if accepted, 0 after Shutdown

@@ -39,7 +39,8 @@ namespace UE::ModelPipelines::PipelineBasePrivate
 
 /**
  * Everything an in-flight call needs, without the UObject. Immutable after InitializeFromPackage except for the
- * once-resolved model info, which is written under ResolveLock and read-only afterwards.
+ * once-resolved state (ResolveResult, ResolveMs, Info), which only the resolve task writes and which is read only after
+ * that task has completed (a call either has it as a prerequisite or waits on it), so it needs no lock.
  */
 struct FPipelineRuntime
 {
@@ -49,23 +50,47 @@ struct FPipelineRuntime
 	FPipelinePostprocessSettings PostprocessSettings;
 	TArray<FString> Labels;
 
+	/** Guards ResolveTask creation only (held for the Launch call, never across the work). */
 	FCriticalSection ResolveLock;
-	bool bResolved = false;
+	/** The one resolve task; invalid until the first call creates it. Kept so later calls can depend on it. */
+	UE::Tasks::FTask ResolveTask;
+
+	/** Written by the resolve task; read-only once it completed. */
 	FPipelineResult ResolveResult;
+	double ResolveMs = 0.0;
 	FPipelineModelInfo Info;
 
 	/**
-	 * Any thread except the game thread for async calls (blocking calls may use it). First call: Model->Initialize and
-	 * ResolvePipelineTaskIO; the outcome is cached. OutMs = time spent here by this call on the work (0 when cached).
+	 * Any thread. Returns the resolve task, launching it on the first call (bOutLaunched = true for that call only, so
+	 * exactly one call adds ResolveMs to its InferenceMs). Callers either launch work with it as a prerequisite or wait
+	 * on it; nobody holds a lock or occupies a worker while Model->Initialize runs.
 	 */
-	FPipelineResult EnsureResolved(double& OutMs)
+	static UE::Tasks::FTask GetOrLaunchResolve(const TSharedPtr<FPipelineRuntime, ESPMode::ThreadSafe>& Self, bool& bOutLaunched)
 	{
-		OutMs = 0.0;
-		FScopeLock Lock(&ResolveLock);
-		if (bResolved)
+		bOutLaunched = false;
+		FScopeLock Lock(&Self->ResolveLock);
+		if (!Self->ResolveTask.IsValid())
 		{
-			return ResolveResult;
+			// Weak: the runtime holds the task, so the task must not hold the runtime. Every caller holds a strong
+			// reference until the task has completed, so the pin only fails if nobody is left to read the outcome.
+			const TWeakPtr<FPipelineRuntime, ESPMode::ThreadSafe> Weak = Self;
+			Self->ResolveTask = UE::Tasks::Launch(TEXT("ModelPipelines.Resolve"), [Weak]()
+			{
+				if (const TSharedPtr<FPipelineRuntime, ESPMode::ThreadSafe> Pinned = Weak.Pin())
+				{
+					Pinned->DoResolve();
+				}
+			}, UE::Tasks::ETaskPriority::BackgroundNormal);
+			bOutLaunched = true;
 		}
+		return Self->ResolveTask;
+	}
+
+private:
+	/** Resolve task body, runs once: Model->Initialize and ResolvePipelineTaskIO; the outcome is cached. */
+	void DoResolve()
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE_STR("ModelPipelines.Resolve");
 		const double Start = FPlatformTime::Seconds();
 		FPipelineResult R;
 		if (!Model.IsValid())
@@ -99,9 +124,7 @@ struct FPipelineRuntime
 			}
 		}
 		ResolveResult = R;
-		bResolved = true;
-		OutMs = (FPlatformTime::Seconds() - Start) * 1000.0;
-		return ResolveResult;
+		ResolveMs = (FPlatformTime::Seconds() - Start) * 1000.0;
 	}
 };
 
@@ -120,6 +143,16 @@ namespace UE::ModelPipelines::PipelineBasePrivate
 		double PreprocessMs = 0.0;
 		double InferenceMs = 0.0;
 		double PostprocessMs = 0.0;
+
+		/** Set by Finish when the stages are handed over (Complete runs). Game thread only. */
+		bool bFinished = false;
+
+		FCallState() = default;
+		FCallState(const FCallState&) = delete;
+		FCallState& operator=(const FCallState&) = delete;
+
+		/** Delivers Fail(Cancelled) if the call was dropped (e.g. by the executor) before Complete ran. */
+		~FCallState();
 	};
 
 	using FCallStateRef = TSharedPtr<FCallState, ESPMode::ThreadSafe>;
@@ -142,6 +175,7 @@ namespace UE::ModelPipelines::PipelineBasePrivate
 	static void Finish(const FCallStateRef& State, FPipelineResult Result)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE_STR("ModelPipelines.Complete");
+		State->bFinished = true;
 		ApplyTimings(Result, State->QueueMs, State->PreprocessMs, State->InferenceMs, State->PostprocessMs, State->Device);
 
 		// Take the stage functions out of the shared state so they die on this thread, whoever drops the state last.
@@ -170,6 +204,49 @@ namespace UE::ModelPipelines::PipelineBasePrivate
 		{
 			Finish(State, Result);
 		});
+	}
+
+	FCallState::~FCallState()
+	{
+		if (bFinished)
+		{
+			return; // normal path: Finish already took the stages and ran Complete
+		}
+		bFinished = true;
+
+		if (IsEngineExitRequested())
+		{
+			// The game thread may never run another task: no Complete. The stage functions are destroyed here, on
+			// whatever thread drops the call last (accepted at engine exit only).
+			if (Pending.IsValid())
+			{
+				Pending->Decrement();
+			}
+			return;
+		}
+
+		// The call was dropped before Complete (the executor shut down with the job queued, or was destroyed with the
+		// job waiting for dispatch). This object is going away, so hand the stages and timings to a fresh state and
+		// finish that one. Its own destructor sees bFinished once Finish ran; if its posted task is itself dropped, it
+		// lands back here (at engine exit, the branch above).
+		FCallStateRef Orphan = MakeShared<FCallState, ESPMode::ThreadSafe>();
+		Orphan->Pending = MoveTemp(Pending);
+		Orphan->Stages = MoveTemp(Stages);
+		Orphan->Device = Device;
+		Orphan->QueueMs = QueueMs;
+		Orphan->PreprocessMs = PreprocessMs;
+		Orphan->InferenceMs = InferenceMs;
+		Orphan->PostprocessMs = PostprocessMs;
+		const FPipelineResult Cancelled = FPipelineResult::Fail(EPipelineError::Cancelled,
+			TEXT("the executor shut down before this call completed"));
+		if (IsInGameThread())
+		{
+			Finish(Orphan, Cancelled);
+		}
+		else
+		{
+			PostFinish(Orphan, Cancelled);
+		}
 	}
 
 	/** Background task. Postprocess, then Complete on the game thread. */
@@ -208,17 +285,22 @@ namespace UE::ModelPipelines::PipelineBasePrivate
 		UE::Tasks::Launch(TEXT("ModelPipelines.Postprocess"), [State]()
 		{
 			RunPostprocess(State);
-		});
+		}, UE::Tasks::ETaskPriority::BackgroundNormal);
 	}
 
-	/** Background task. Resolve (first call), Preprocess, then enqueue inference. */
-	static void RunPreprocessAndEnqueue(const FCallStateRef& State)
+	/**
+	 * Background task, launched with the runtime's resolve task as its prerequisite, so the resolve outcome is final
+	 * here. Preprocess, then enqueue inference.
+	 */
+	static void RunPreprocessAndEnqueue(const FCallStateRef& State, bool bLaunchedResolve)
 	{
 		FPipelineRuntime& Rt = *State->Runtime;
 
-		double ResolveMs = 0.0;
-		const FPipelineResult Resolved = Rt.EnsureResolved(ResolveMs);
-		State->InferenceMs += ResolveMs;
+		if (bLaunchedResolve)
+		{
+			State->InferenceMs += Rt.ResolveMs;
+		}
+		const FPipelineResult Resolved = Rt.ResolveResult;
 		if (!Resolved.bSuccess)
 		{
 			PostFinish(State, Resolved);
@@ -246,13 +328,15 @@ namespace UE::ModelPipelines::PipelineBasePrivate
 			return;
 		}
 
-		FModelPipelinesCoreModule* Module = FModelPipelinesCoreModule::TryGet();
-		if (Module == nullptr)
+		// A shared reference: the module may shut down on the game thread at any moment; the executor then stays alive
+		// for this call and Enqueue returns 0.
+		const TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> Executor = FPipelineExecutor::TryGetShared();
+		if (!Executor.IsValid())
 		{
 			PostFinish(State, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("ModelPipelinesCore module is not loaded")));
 			return;
 		}
-		const FPipelineJobId Id = Module->GetExecutor().Enqueue(Rt.Model, MoveTemp(Inputs),
+		const FPipelineJobId Id = Executor->Enqueue(Rt.Model, MoveTemp(Inputs),
 			[State](const FPipelineResult& InferResult, TArray<FPipelineTensor>&& Outputs)
 			{
 				OnInferenceDone(State, InferResult, MoveTemp(Outputs));
@@ -428,10 +512,15 @@ void UPipelineBase::RunStages(FPipelineStages&& Stages)
 	}
 
 	State->Runtime = Runtime;
-	UE::Tasks::Launch(TEXT("ModelPipelines.Preprocess"), [State]()
+
+	// The first call launches the resolve task (Model->Initialize + ResolvePipelineTaskIO); every call's preprocess
+	// task waits for it as a prerequisite, so queued calls don't occupy a worker while the model initializes.
+	bool bLaunchedResolve = false;
+	UE::Tasks::FTask ResolveTask = FPipelineRuntime::GetOrLaunchResolve(Runtime, bLaunchedResolve);
+	UE::Tasks::Launch(TEXT("ModelPipelines.Preprocess"), [State, bLaunchedResolve]()
 	{
-		RunPreprocessAndEnqueue(State);
-	});
+		RunPreprocessAndEnqueue(State, bLaunchedResolve);
+	}, UE::Tasks::Prerequisites(ResolveTask), UE::Tasks::ETaskPriority::BackgroundNormal);
 }
 
 FPipelineResult UPipelineBase::RunStagesBlocking(FPipelineStages&& Stages)
@@ -450,9 +539,15 @@ FPipelineResult UPipelineBase::RunStagesBlocking(FPipelineStages&& Stages)
 	double PostprocessMs = 0.0;
 	EPipelineDevice Device = EPipelineDevice::Auto;
 
-	double ResolveMs = 0.0;
-	FPipelineResult Resolved = Rt->EnsureResolved(ResolveMs);
-	InferenceMs += ResolveMs;
+	// Tests and tools only: waiting here is allowed (it may run the resolve inline if no worker picked it up yet).
+	bool bLaunchedResolve = false;
+	const UE::Tasks::FTask ResolveTask = FPipelineRuntime::GetOrLaunchResolve(Rt, bLaunchedResolve);
+	ResolveTask.Wait();
+	if (bLaunchedResolve)
+	{
+		InferenceMs += Rt->ResolveMs;
+	}
+	FPipelineResult Resolved = Rt->ResolveResult;
 	if (!Resolved.bSuccess)
 	{
 		ApplyTimings(Resolved, QueueMs, PreprocessMs, InferenceMs, PostprocessMs, Device);
@@ -475,15 +570,15 @@ FPipelineResult UPipelineBase::RunStagesBlocking(FPipelineStages&& Stages)
 		return R;
 	}
 
-	FModelPipelinesCoreModule* Module = FModelPipelinesCoreModule::TryGet();
-	if (Module == nullptr)
+	const TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> Executor = FPipelineExecutor::TryGetShared();
+	if (!Executor.IsValid())
 	{
 		R = FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("ModelPipelinesCore module is not loaded"));
 		ApplyTimings(R, QueueMs, PreprocessMs, InferenceMs, PostprocessMs, Device);
 		return R;
 	}
 	TArray<FPipelineTensor> Outputs;
-	FPipelineResult InferResult = Module->GetExecutor().RunBlocking(Rt->Model, Inputs, Outputs);
+	FPipelineResult InferResult = Executor->RunBlocking(Rt->Model, Inputs, Outputs);
 	Inputs.Empty();
 	QueueMs = InferResult.QueueMs;
 	InferenceMs += InferResult.InferenceMs;

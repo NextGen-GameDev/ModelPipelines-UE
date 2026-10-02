@@ -358,6 +358,8 @@ FPipelineExecutor& FPipelineExecutor::Get()
 	return FModelPipelinesCoreModule::Get().GetExecutor();
 }
 
+// FPipelineExecutor::TryGetShared() is defined in ModelPipelinesCoreModule.cpp, next to the slot the module owns.
+
 FPipelineJobId FPipelineExecutor::Enqueue(TSharedPtr<IPipelineModel> Model, TArray<FPipelineTensor> Inputs,
 	FPipelineInferenceCallback OnComplete, const UObject* Owner, int32 Priority)
 {

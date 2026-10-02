@@ -279,6 +279,7 @@ namespace PipelineModelValidatorPrivate
 		float InferenceMs = 0.f;
 		ECode Code = ECode::None;   // SmokeRunFailed or SmokeOutputInvalid on failure
 		FString Message;            // without the device prefix
+		FString Reason;             // the bare failure reason (no "smoke run ..." wording)
 	};
 
 	static FSmokeOutcome RunSmoke(const TSharedPtr<IPipelineModel>& Model, const UPipelineModelPackage& Package,
@@ -293,6 +294,7 @@ namespace PipelineModelValidatorPrivate
 		if (!BuildSmokeInputs(Package, InputDescs, B, Ids, Inputs, Error))
 		{
 			Out.Code = ECode::SmokeRunFailed;
+			Out.Reason = Error;
 			Out.Message = FString::Printf(TEXT("smoke run not started: %s"), *Error);
 			return Out;
 		}
@@ -303,12 +305,14 @@ namespace PipelineModelValidatorPrivate
 		if (!Result.bSuccess)
 		{
 			Out.Code = ECode::SmokeRunFailed;
+			Out.Reason = Result.Message.IsEmpty() ? FString(TEXT("the run failed")) : Result.Message;
 			Out.Message = FString::Printf(TEXT("smoke run failed: %s"), *Result.Message);
 			return Out;
 		}
 		if (!CheckSmokeOutputs(Package, B, OutputDescs, Ids.Num(), Outputs, Error))
 		{
 			Out.Code = ECode::SmokeOutputInvalid;
+			Out.Reason = Error;
 			Out.Message = FString::Printf(TEXT("smoke run output invalid: %s"), *Error);
 			return Out;
 		}
@@ -367,9 +371,11 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 
 	// Step 2: tokenizer (text tasks only).
 	TArray<int32> Ids;
+	// Kept alive for the worst-case run in step 5 (text tasks only).
+	TStrongObjectPtr<UTokenizerWrapper> Tokenizer;
 	if (IsTextTask(Task))
 	{
-		TStrongObjectPtr<UTokenizerWrapper> Tokenizer(NewObject<UTokenizerWrapper>(GetTransientPackage()));
+		Tokenizer.Reset(NewObject<UTokenizerWrapper>(GetTransientPackage()));
 		if (!Tokenizer.IsValid() || !Tokenizer->InitializeTokenizerFromJson(Package->TokenizerJson))
 		{
 			const FString Why = Tokenizer.IsValid() ? Tokenizer->GetLastError() : FString(TEXT("could not create the tokenizer object"));
@@ -464,6 +470,36 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 			const FString Msg = FString::Printf(TEXT("CPU: %s"), *Smoke.Message);
 			Cpu.Message = Msg;
 			Report.Add(ESev::Error, Smoke.Code, Msg);
+		}
+		else if (IsTextTask(Task) && Tokenizer.IsValid())
+		{
+			// Worst case (C23c): MaxTokens tokens, all the tokenizer's highest id. ORT errors on an id past the
+			// embedding table or a sequence past the position table; prove here, where errors are caught, that it doesn't.
+			// Cpu.InferenceMs stays the normal smoke run's.
+			const int32 VocabSize = Tokenizer->GetVocabSize();
+			if (VocabSize < 1)
+			{
+				const FString Why = Tokenizer->GetLastError();
+				Report.Add(ESev::Error, ECode::TokenizerInvalid, Why.IsEmpty()
+					? FString(TEXT("The tokenizer reports no vocabulary. Check the package's tokenizer.json."))
+					: FString::Printf(TEXT("The tokenizer reports no vocabulary (%s). Check the package's tokenizer.json."), *Why));
+			}
+			else
+			{
+				const int32 MaxTokens = FMath::Max(1, Package->Preprocess.MaxTokens);
+				const int32 TopId = VocabSize - 1;
+				TArray<int32> WorstIds;
+				WorstIds.Init(TopId, MaxTokens);
+				const FSmokeOutcome Worst = RunSmoke(CpuModel, *Package, Bindings, WorstIds);
+				if (!Worst.bRan)
+				{
+					const FString Msg = FString::Printf(
+						TEXT("CPU: worst-case input failed (MaxTokens %d tokens, token id %d): %s. The model's vocabulary or position limit is smaller than the tokenizer or MaxTokens; lower MaxTokens or use the matching tokenizer."),
+						MaxTokens, TopId, *Worst.Reason);
+					Report.DeviceChecks[CpuIndex].Message = Msg;
+					Report.Add(ESev::Error, ECode::SmokeRunFailed, Msg);
+				}
+			}
 		}
 	}
 	CpuModel.Reset();

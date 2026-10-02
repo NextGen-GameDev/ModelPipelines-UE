@@ -9,6 +9,7 @@
 /**
  * Numeric helpers shared by the task pipelines (docs/contracts.md C18).
  * Pure functions: callable from any thread, never assert on their inputs.
+ * An Out array must not alias (share memory with) the input views of the same call.
  */
 namespace UE::ModelPipelines
 {

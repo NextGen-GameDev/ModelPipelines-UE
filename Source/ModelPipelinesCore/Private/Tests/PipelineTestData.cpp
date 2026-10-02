@@ -104,6 +104,48 @@ namespace UE::ModelPipelines::Tests
 		return FPipelineTensor();
 	}
 
+	UNNEModelData* LoadModelFile(const FString& AbsPath, FString& OutError)
+	{
+		TArray<uint8> Bytes;
+		if (!FFileHelper::LoadFileToArray(Bytes, *AbsPath) || Bytes.Num() == 0)
+		{
+			OutError = FString::Printf(TEXT("Missing model file '%s'. Fetch: run ModelPipelines-UE/Tools/make_import_test_data.py (and fetch_reference_models.py) so that <dev>/models/import_test exists."), *AbsPath);
+			return nullptr;
+		}
+		UNNEModelData* Data = NewObject<UNNEModelData>(GetTransientPackage());
+		Data->Init(TEXT("onnx"), TConstArrayView64<uint8>(Bytes.GetData(), (int64)Bytes.Num()));
+		return Data;
+	}
+
+	TSharedPtr<FJsonObject> LoadJsonFile(const FString& AbsPath, FString& OutError)
+	{
+		FString Text;
+		if (!FFileHelper::LoadFileToString(Text, *AbsPath))
+		{
+			OutError = FString::Printf(TEXT("Missing JSON file '%s'."), *AbsPath);
+			return nullptr;
+		}
+		TSharedPtr<FJsonObject> Root;
+		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Text);
+		if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+		{
+			OutError = FString::Printf(TEXT("File '%s' is not valid JSON."), *AbsPath);
+			return nullptr;
+		}
+		return Root;
+	}
+
+	TSharedPtr<FJsonObject> LoadTextGoldens(FString& OutError)
+	{
+		const FString Path = GetDevDir() / TEXT("goldens/text/text_goldens.json");
+		TSharedPtr<FJsonObject> Root = LoadJsonFile(Path, OutError);
+		if (!Root.IsValid())
+		{
+			OutError += TEXT(" Generate the text goldens with: \"D:/Micromamba/micromambaenv/envs/pipelines/python.exe\" ModelPipelines-UE/Tools/make_text_goldens.py");
+		}
+		return Root;
+	}
+
 	bool IsGpuRequired()
 	{
 		return FPlatformMisc::GetEnvironmentVariable(TEXT("MODELPIPELINES_REQUIRE_GPU")) == TEXT("1");

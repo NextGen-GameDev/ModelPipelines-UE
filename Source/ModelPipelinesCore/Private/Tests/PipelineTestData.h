@@ -27,6 +27,15 @@ namespace UE::ModelPipelines::Tests
 	/** Builds a tensor from {"type","shape","data"} (float32, int64, int32). Invalid tensor on anything unexpected. */
 	FPipelineTensor TensorFromGoldenJson(const TSharedPtr<FJsonObject>& Obj);
 
+	/** Reads an absolute .onnx path into a transient UNNEModelData ("onnx"). nullptr + OutError (with the path) if missing or empty. Caller keeps it alive. */
+	UNNEModelData* LoadModelFile(const FString& AbsPath, FString& OutError);
+
+	/** Reads and parses any JSON file. nullptr + OutError on a missing file or bad JSON. */
+	TSharedPtr<FJsonObject> LoadJsonFile(const FString& AbsPath, FString& OutError);
+
+	/** <dev>/goldens/text/text_goldens.json. nullptr + OutError (with the generate command) on failure. */
+	TSharedPtr<FJsonObject> LoadTextGoldens(FString& OutError);
+
 	/** env MODELPIPELINES_REQUIRE_GPU == "1". */
 	bool IsGpuRequired();
 

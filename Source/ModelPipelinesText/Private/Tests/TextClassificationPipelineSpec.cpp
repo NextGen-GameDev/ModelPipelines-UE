@@ -255,14 +255,10 @@ namespace TextClassSpecPrivate
 			}
 			const bool bLabelOk = R.Label == G->Label && R.Index == G->Index;
 			if (bLabelOk) { ++Matched; }
-			else if (G->TopMargin >= 2.0 * AbsTol)
-			{
-				if (LabelMismatches++ == 0) { FirstLabelBad = FString::Printf(TEXT("%s: got '%s'(%d) golden '%s'(%d) margin %.4g"), *Id, *R.Label, R.Index, *G->Label, G->Index, G->TopMargin); }
-			}
 			else
 			{
-				++Matched;
-				T.AddInfo(FString::Printf(TEXT("%s: %s label flip tolerated, golden margin %.3g"), Label, *Id, G->TopMargin));
+				// Strict (PLAN M3: labels match for every sentence). The goldens guarantee a top-1 margin >= 0.01.
+				if (LabelMismatches++ == 0) { FirstLabelBad = FString::Printf(TEXT("%s: got '%s'(%d) golden '%s'(%d) margin %.4g"), *Id, *R.Label, R.Index, *G->Label, G->Index, G->TopMargin); }
 			}
 			// Internal consistency: summary fields repeat TopK[0]; TopK holds label strings of the package.
 			if (R.TopK.Num() < 1)

@@ -101,7 +101,7 @@ FPipelineResult UTextClassificationPipeline::OnInitialize(UPipelineModelPackage*
 	}
 	FPipelineTextStatePtr NewState;
 	UTokenizerWrapper* NewTokenizer = nullptr;
-	const FPipelineResult R = CreateTextState(this, *InPackage, NewState, NewTokenizer);
+	const FPipelineResult R = CreateTextState(*InPackage, NewState, NewTokenizer);
 	if (!R.bSuccess)
 	{
 		UE_LOG(LogModelPipelinesText, Warning, TEXT("UTextClassificationPipeline: %s"), *R.Message);
@@ -112,14 +112,8 @@ FPipelineResult UTextClassificationPipeline::OnInitialize(UPipelineModelPackage*
 	return FPipelineResult::Ok();
 }
 
-void UTextClassificationPipeline::BeginDestroy()
-{
-	// Game thread. In-flight calls keep their own references; the last one drops when the base destroys the stages there.
-	TextState.Reset();
-	Super::BeginDestroy();
-}
-
-FPipelineStages UTextClassificationPipeline::MakeStages(const TArray<FString>& Texts, int32 TopK,
+FPipelineStages UTextClassificationPipeline::MakeStages(const UE::ModelPipelines::Text::FPipelineTextStatePtr& State,
+	const TArray<FString>& Texts, int32 TopK,
 	const TSharedRef<TArray<FPipelineClassification>, ESPMode::ThreadSafe>& Results)
 {
 	using namespace UE::ModelPipelines::Text;
@@ -127,11 +121,14 @@ FPipelineStages UTextClassificationPipeline::MakeStages(const TArray<FString>& T
 
 	const TSharedRef<FClassificationCall, ESPMode::ThreadSafe> Call = MakeShared<FClassificationCall, ESPMode::ThreadSafe>();
 	Call->Texts = Texts;
-	Call->Labels = GetLabels();
-	Call->Activation = GetPostprocessSettings().ScoreActivation;
 	Call->TopK = TopK;
-	const FPipelineTextStatePtr State = TextState;
-
+	if (State.IsValid())
+	{
+		// Only with a state: a null state means the call is failed anyway (possibly issued off the game thread).
+		Call->Labels = GetLabels();
+		Call->Activation = GetPostprocessSettings().ScoreActivation;
+	}
+	
 	FPipelineStages Stages;
 	Stages.Preprocess = [State, Call](const FPipelineModelInfo& Info, TArray<FPipelineTensor>& OutInputs) -> FPipelineResult
 	{
@@ -150,7 +147,7 @@ FPipelineStages UTextClassificationPipeline::MakeStages(const TArray<FString>& T
 	{
 		if (!State.IsValid())
 		{
-			return FPipelineResult::Fail(EPipelineError::Internal, TEXT("text state missing"));
+			return FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("pipeline is not initialized (no tokenizer)"));
 		}
 		if (!Outputs.IsValidIndex(Info.Bindings.MainOutput))
 		{
@@ -183,7 +180,9 @@ void UTextClassificationPipeline::ClassifyAsync(const TArray<FString>& Texts, in
 	}
 
 	const TSharedRef<TArray<FPipelineClassification>, ESPMode::ThreadSafe> Results = MakeShared<TArray<FPipelineClassification>, ESPMode::ThreadSafe>();
-	FPipelineStages Stages = MakeStages(Texts, TopK, Results);
+	// Off the game thread pass no state: RunStages fails the call there, and TextState is only read on the game thread.
+	const UE::ModelPipelines::Text::FPipelineTextStatePtr State = IsInGameThread() ? TextState : nullptr;
+	FPipelineStages Stages = MakeStages(State, Texts, TopK, Results);
 	Stages.Complete = [Results, Callback = MoveTemp(OnComplete)](const FPipelineResult& Result) mutable
 	{
 		if (Result.bSuccess)
@@ -207,7 +206,7 @@ FPipelineResult UTextClassificationPipeline::ClassifyBlocking(const TArray<FStri
 		return Count;
 	}
 	const TSharedRef<TArray<FPipelineClassification>, ESPMode::ThreadSafe> Results = MakeShared<TArray<FPipelineClassification>, ESPMode::ThreadSafe>();
-	const FPipelineResult R = RunStagesBlocking(MakeStages(Texts, TopK, Results));
+	const FPipelineResult R = RunStagesBlocking(MakeStages(TextState, Texts, TopK, Results));
 	if (R.bSuccess)
 	{
 		OutResults = MoveTemp(*Results);

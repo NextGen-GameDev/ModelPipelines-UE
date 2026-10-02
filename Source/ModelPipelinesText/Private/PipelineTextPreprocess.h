@@ -21,8 +21,8 @@ namespace UE::ModelPipelines::Text
 
 	/**
 	 * State shared by a text pipeline and its in-flight calls (C20). Not a UObject. The pipeline holds it as a thread-safe
-	 * TSharedPtr and the stage lambdas capture it; the last reference drops on the game thread (BeginDestroy or the base
-	 * destroying the stage functions there), so the TStrongObjectPtr is released there.
+	 * TSharedPtr and the stage lambdas capture it; the last reference drops on the game thread (the pipeline's destructor or
+	 * the base destroying the stage functions there), so the TStrongObjectPtr is released there.
 	 */
 	struct FPipelineTextState
 	{
@@ -47,9 +47,9 @@ namespace UE::ModelPipelines::Text
 	/** Any thread. Empty -> InvalidArgument "no texts"; more than MaxTextsPerCall -> InvalidArgument; else Ok(). */
 	FPipelineResult ValidateTextCount(const TArray<FString>& Texts);
 
-	/** Game thread. New tokenizer (outer: Outer) loaded from Package->TokenizerJson and the package's settings.
-	    Failure -> PreprocessFailed with the tokenizer's error; OutState untouched. */
-	FPipelineResult CreateTextState(UObject* Outer, const UPipelineModelPackage& Package, FPipelineTextStatePtr& OutState,
+	/** Game thread. New tokenizer (outer: the transient package) loaded from Package->TokenizerJson and the package's
+	    settings. Failure -> PreprocessFailed with the tokenizer's error; OutState untouched. */
+	FPipelineResult CreateTextState(const UPipelineModelPackage& Package, FPipelineTextStatePtr& OutState,
 		UTokenizerWrapper*& OutTokenizer);
 
 	/**

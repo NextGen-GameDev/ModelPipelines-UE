@@ -2,6 +2,7 @@
 
 #include "PipelineTextPreprocess.h"
 
+#include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
 
 DEFINE_LOG_CATEGORY(LogModelPipelinesText);
@@ -31,10 +32,15 @@ namespace UE::ModelPipelines::Text
 			return FPipelineTensor::FromInt64(Shape, Wide);
 		}
 
+		/**
+		 * The tokenizer's last error, or Fallback marked "(no detail available)" when it is empty. GetLastError is read after
+		 * the failed call returned, so another thread's call on the same tokenizer may have replaced or cleared it in between;
+		 * the marker tells the user the message is the generic one. (A precise fix needs a Tokenizers-UE API change.)
+		 */
 		static FString TokenizerError(const UTokenizerWrapper& Tokenizer, const TCHAR* Fallback)
 		{
 			const FString Err = Tokenizer.GetLastError();
-			return Err.IsEmpty() ? FString(Fallback) : Err;
+			return Err.IsEmpty() ? FString::Printf(TEXT("%s (no detail available)"), Fallback) : Err;
 		}
 
 		static bool IsJsonSpace(TCHAR C)
@@ -209,10 +215,12 @@ namespace UE::ModelPipelines::Text
 		return FPipelineResult::Ok();
 	}
 
-	FPipelineResult CreateTextState(UObject* Outer, const UPipelineModelPackage& Package, FPipelineTextStatePtr& OutState,
+	FPipelineResult CreateTextState(const UPipelineModelPackage& Package, FPipelineTextStatePtr& OutState,
 		UTokenizerWrapper*& OutTokenizer)
 	{
-		UTokenizerWrapper* Tokenizer = NewObject<UTokenizerWrapper>(Outer);
+		// Outer is the transient package, not the pipeline: a pipeline-owned subobject held by an in-flight call's
+		// TStrongObjectPtr would keep a garbage-marked pipeline reachable (C20, amended 2026-10-02).
+		UTokenizerWrapper* Tokenizer = NewObject<UTokenizerWrapper>(GetTransientPackage());
 		if (!Tokenizer)
 		{
 			return FPipelineResult::Fail(EPipelineError::Internal, TEXT("could not create the tokenizer object"));
@@ -225,7 +233,7 @@ namespace UE::ModelPipelines::Text
 		}
 		if (!Tokenizer->InitializeTokenizerFromJson(Private::DisableFilePadding(Package.TokenizerJson)))
 		{
-			const FString Err = Private::TokenizerError(*Tokenizer, TEXT("unknown tokenizer error"));
+			const FString Err = Private::TokenizerError(*Tokenizer, TEXT("InitializeTokenizerFromJson failed"));
 			Tokenizer->MarkAsGarbage();
 			return FPipelineResult::Fail(EPipelineError::PreprocessFailed,
 				FString::Printf(TEXT("tokenizer of package '%s' did not load: %s"), *Package.GetName(), *Err));

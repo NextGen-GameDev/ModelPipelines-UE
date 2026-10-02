@@ -113,7 +113,7 @@ FPipelineResult UTextEmbeddingPipeline::OnInitialize(UPipelineModelPackage* InPa
 	}
 	FPipelineTextStatePtr NewState;
 	UTokenizerWrapper* NewTokenizer = nullptr;
-	const FPipelineResult R = CreateTextState(this, *InPackage, NewState, NewTokenizer);
+	const FPipelineResult R = CreateTextState(*InPackage, NewState, NewTokenizer);
 	if (!R.bSuccess)
 	{
 		UE_LOG(LogModelPipelinesText, Warning, TEXT("UTextEmbeddingPipeline: %s"), *R.Message);
@@ -124,14 +124,8 @@ FPipelineResult UTextEmbeddingPipeline::OnInitialize(UPipelineModelPackage* InPa
 	return FPipelineResult::Ok();
 }
 
-void UTextEmbeddingPipeline::BeginDestroy()
-{
-	// Game thread. In-flight calls keep their own references; the last one drops when the base destroys the stages there.
-	TextState.Reset();
-	Super::BeginDestroy();
-}
-
-FPipelineStages UTextEmbeddingPipeline::MakeStages(const TArray<FString>& Texts,
+FPipelineStages UTextEmbeddingPipeline::MakeStages(const UE::ModelPipelines::Text::FPipelineTextStatePtr& State,
+	const TArray<FString>& Texts,
 	const TSharedRef<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>& Embeddings)
 {
 	using namespace UE::ModelPipelines::Text;
@@ -139,8 +133,7 @@ FPipelineStages UTextEmbeddingPipeline::MakeStages(const TArray<FString>& Texts,
 
 	const TSharedRef<FEmbeddingCall, ESPMode::ThreadSafe> Call = MakeShared<FEmbeddingCall, ESPMode::ThreadSafe>();
 	Call->Texts = Texts;
-	const FPipelineTextStatePtr State = TextState;
-
+	
 	FPipelineStages Stages;
 	Stages.Preprocess = [State, Call](const FPipelineModelInfo& Info, TArray<FPipelineTensor>& OutInputs) -> FPipelineResult
 	{
@@ -159,7 +152,7 @@ FPipelineStages UTextEmbeddingPipeline::MakeStages(const TArray<FString>& Texts,
 	{
 		if (!State.IsValid())
 		{
-			return FPipelineResult::Fail(EPipelineError::Internal, TEXT("text state missing"));
+			return FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("pipeline is not initialized (no tokenizer)"));
 		}
 		if (!Outputs.IsValidIndex(Info.Bindings.MainOutput))
 		{
@@ -193,7 +186,9 @@ void UTextEmbeddingPipeline::EmbedAsync(const TArray<FString>& Texts, FPipelineE
 	}
 
 	const TSharedRef<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe> Embeddings = MakeShared<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>();
-	FPipelineStages Stages = MakeStages(Texts, Embeddings);
+	// Off the game thread pass no state: RunStages fails the call there, and TextState is only read on the game thread.
+	const UE::ModelPipelines::Text::FPipelineTextStatePtr State = IsInGameThread() ? TextState : nullptr;
+	FPipelineStages Stages = MakeStages(State, Texts, Embeddings);
 	Stages.Complete = [Embeddings, Callback = MoveTemp(OnComplete)](const FPipelineResult& Result) mutable
 	{
 		if (Result.bSuccess)
@@ -217,7 +212,7 @@ FPipelineResult UTextEmbeddingPipeline::EmbedBlocking(const TArray<FString>& Tex
 		return Count;
 	}
 	const TSharedRef<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe> Embeddings = MakeShared<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>();
-	const FPipelineResult R = RunStagesBlocking(MakeStages(Texts, Embeddings));
+	const FPipelineResult R = RunStagesBlocking(MakeStages(TextState, Texts, Embeddings));
 	if (R.bSuccess)
 	{
 		OutEmbeddings = MoveTemp(*Embeddings);

@@ -9,6 +9,6 @@ public class ModelPipelinesText : ModuleRules
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "ModelPipelinesCore" });
-		PrivateDependencyModuleNames.AddRange(new string[] { "Tokenizers", "Json" }); // Json: automation tests read goldens
+		PrivateDependencyModuleNames.AddRange(new string[] { "Tokenizers", "Json", "NNE" }); // Json, NNE: automation tests read goldens and build packages
 	}
 }

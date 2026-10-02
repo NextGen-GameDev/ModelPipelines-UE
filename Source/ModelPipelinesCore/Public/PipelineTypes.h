@@ -37,6 +37,8 @@ enum class EPipelineError : uint8
 	/** (M2+) Package task does not match the pipeline. */
 	WrongTask = 8,
 	Internal = 9,
+	/** (M3+) Tokenizer or image preprocessing failed (tokenizer did not load, EncodeBatch failed). */
+	PreprocessFailed = 10,
 };
 
 /** Result returned by every pipeline API. A default-constructed result is a failure with Error None. */

@@ -9,6 +9,7 @@
 #include "TextPipelineLibrary.generated.h"
 
 class UPipelineModelPackage;
+class UTextClassificationPipeline;
 class UTextEmbeddingPipeline;
 
 /** Creators of the text task pipelines (docs/contracts.md C20). */
@@ -21,4 +22,8 @@ public:
 	/** Game thread. New pipeline (outer: transient package; hold it in a UPROPERTY) or nullptr with OutResult saying why. */
 	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Text")
 	static UTextEmbeddingPipeline* CreateTextEmbeddingPipeline(UPipelineModelPackage* Package, FPipelineResult& OutResult);
+
+	/** Game thread. New pipeline (outer: transient package; hold it in a UPROPERTY) or nullptr with OutResult saying why. */
+	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Text")
+	static UTextClassificationPipeline* CreateTextClassificationPipeline(UPipelineModelPackage* Package, FPipelineResult& OutResult);
 };

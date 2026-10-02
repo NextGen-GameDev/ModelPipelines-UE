@@ -1,0 +1,205 @@
+{
+ "schema": "pipelines-text-sentences/1",
+ "sentences": [
+  {
+   "id": "t00",
+   "text": "Where is the blacksmith?"
+  },
+  {
+   "id": "t01",
+   "text": "I need to buy a healing potion."
+  },
+  {
+   "id": "t02",
+   "text": "How do I get to the castle?"
+  },
+  {
+   "id": "t03",
+   "text": "The merchant sells swords and shields."
+  },
+  {
+   "id": "t04",
+   "text": "What time does the tavern open?"
+  },
+  {
+   "id": "t05",
+   "text": "Can you tell me where the smithy is?"
+  },
+  {
+   "id": "t06",
+   "text": "Where can I find the blacksmith's forge?"
+  },
+  {
+   "id": "t07",
+   "text": "Where can I purchase a health potion?"
+  },
+  {
+   "id": "t08",
+   "text": "Which road leads to the castle?"
+  },
+  {
+   "id": "t09",
+   "text": "The shopkeeper has blades and shields for sale."
+  },
+  {
+   "id": "t10",
+   "text": "When does the inn open its doors?"
+  },
+  {
+   "id": "t11",
+   "text": "Bring me ten wolf pelts and I will reward you handsomely."
+  },
+  {
+   "id": "t12",
+   "text": "Beware, the dragon sleeps in the northern cave."
+  },
+  {
+   "id": "t13",
+   "text": "Halt! Who goes there?"
+  },
+  {
+   "id": "t14",
+   "text": "That will be fifty gold coins, traveler."
+  },
+  {
+   "id": "t15",
+   "text": "The bridge is out, so you will have to swim."
+  },
+  {
+   "id": "t16",
+   "text": "Your sword is sharp, but your courage is sharper."
+  },
+  {
+   "id": "t17",
+   "text": "This game is absolutely wonderful, I loved every minute of it."
+  },
+  {
+   "id": "t18",
+   "text": "The soundtrack is gorgeous and the story kept me hooked."
+  },
+  {
+   "id": "t19",
+   "text": "Fantastic customer service, very friendly and helpful!"
+  },
+  {
+   "id": "t20",
+   "text": "What a delightful surprise, easily the best purchase I made this year."
+  },
+  {
+   "id": "t21",
+   "text": "A brilliant, heartwarming film that made me smile all evening."
+  },
+  {
+   "id": "t22",
+   "text": "Terrible experience, the servers lag constantly and support ignored me."
+  },
+  {
+   "id": "t23",
+   "text": "The ending was boring and the controls are awful."
+  },
+  {
+   "id": "t24",
+   "text": "I hate how buggy and broken this update is."
+  },
+  {
+   "id": "t25",
+   "text": "A complete waste of money, totally disappointing."
+  },
+  {
+   "id": "t26",
+   "text": "The food was cold and the waiter was rude."
+  },
+  {
+   "id": "t27",
+   "text": "Où se trouve la forge du village ?"
+  },
+  {
+   "id": "t28",
+   "text": "Der Schmied hat heute wegen des Festes geschlossen."
+  },
+  {
+   "id": "t29",
+   "text": "¿Dónde puedo comprar una poción de curación?"
+  },
+  {
+   "id": "t30",
+   "text": "鍛冶屋はどこですか？"
+  },
+  {
+   "id": "t31",
+   "text": "请问铁匠铺在哪里？"
+  },
+  {
+   "id": "t32",
+   "text": "Где находится кузница?"
+  },
+  {
+   "id": "t33",
+   "text": "Πού βρίσκεται το σιδεράδικο;"
+  },
+  {
+   "id": "t34",
+   "text": "Great quest! 🎉🔥 See you at the tavern 🍻"
+  },
+  {
+   "id": "t35",
+   "text": "Family trip: 👨‍👩‍👧 packed and ready"
+  },
+  {
+   "id": "t36",
+   "text": "Team Japan 🇯🇵 wins the finals"
+  },
+  {
+   "id": "t37",
+   "text": "Café au lait is on the menu"
+  },
+  {
+   "id": "t38",
+   "text": "A naïve façade, über-cool Zoë"
+  },
+  {
+   "id": "t39",
+   "text": ""
+  },
+  {
+   "id": "t40",
+   "text": "   \t  "
+  },
+  {
+   "id": "t41",
+   "text": "Chapter Three: The Road to Highmoor. The traveler who leaves the village of Eastbrook at dawn will find the old merchant road already crowded with carts, mules and weary pilgrims. Follow the river for half a day until you reach the stone bridge, where a toll keeper named Orrin collects two copper coins from anyone who is not carrying a weapon, and four from anyone who is. Beyond the bridge the road climbs through a forest of silver birch, and it is here that most travelers make their first mistake: they leave the path to chase the lights that drift between the trunks. Those lights are not lanterns. They are the restless spirits of lost wanderers, and they will lead you in circles until nightfall. Keep to the road, keep your torch lit, and do not answer if you hear your own name called from among the trees. By midday you will come to a clearing with a ruined shrine. The monks who once tended it left long ago, but the well still holds clean water, and the moss-covered benches make a fine place to rest. Leave a small offering on the altar, a coin or a loaf of bread, and the shrine's old guardian may grant you safe passage through the marshes ahead. The marshes are the most dangerous part of the journey. Fog rolls in without warning, the ground turns to mud, and the croaking of giant toads can drown out the footsteps of anything that stalks you from behind. Carry a long staff to test the ground, travel in a group if you can, and never drink the water. Once you are through, the walls of Highmoor will rise above the heather, and the lamps of the gatehouse will be a welcome sight after so many days on the road."
+  },
+  {
+   "id": "t42",
+   "text": "Appendix: A Brief History of the Ember Guild. The Ember Guild was founded in the third winter after the great frost, when a handful of smiths, alchemists and cartographers gathered in a cellar beneath the Grey Market to share what little coal they had left. At first the guild was nothing more than a promise between neighbors: whoever had fire would share it, and whoever had knowledge would teach it. Within ten years the cellar had grown into a hall, the hall into a house with three floors, and the house into a sprawling campus of workshops, libraries and training yards that stretched across half the old quarter. Its first master, a quiet woman named Isolde Varn, wrote the charter that still hangs above the main door. It has only three rules. Never forge a weapon you would not carry yourself. Never sell a map you have not walked. Never turn away a stranger on a cold night. These rules were tested many times. During the Salt Wars, rival lords offered fortunes for blades that could not be blocked and potions that could not be tasted, and several members were tempted. The guild survived by voting, loudly and at length, in the great hall, and by sending the most stubborn argument-winners to serve as envoys. Over the following century the guild developed the famous ember-glass, a pale orange crystal that stores heat for months and releases it slowly when struck. Merchants carried it north to warm remote outposts, and sailors tied it to the masts of their ships to keep the ropes from freezing. Cartographers of the guild also mapped the Shattered Coast, the Hollow Peaks and the long river valleys of the south, and their charts, drawn in brown ink on goat leather, are still used by caravans today. Not everything in the guild's past is a source of pride. In the year of the red comet, a group of apprentices broke into the vault and sold the master recipes to a foreign court, and for a generation the guild was mocked in every tavern from the coast to the capital. It recovered slowly, through patient work and a long list of public apologies, and today new members must read the full account of that betrayal before they are allowed to touch the anvil. The guild now counts nearly four hundred members, split among the forge, the laboratory and the map room. Each spring it opens its doors for a week, and anyone may walk the halls, watch the glassblowers, taste the soups in the kitchens and ask the masters questions. Visitors are asked only to leave their muddy boots at the entrance, to keep their hands away from the furnaces, and to remember that every tool in the building was made by someone who cared deeply about getting it right. The guild's motto, carved into the lintel above the cellar stairs where it all began, reads simply: share the fire, and the winter grows shorter for everyone who lives through it."
+  },
+  {
+   "id": "t43",
+   "text": "!!! ??? ..."
+  },
+  {
+   "id": "t44",
+   "text": "42 + 17 = 59"
+  },
+  {
+   "id": "t45",
+   "text": "3.14159, 2.71828, 1.41421"
+  },
+  {
+   "id": "t46",
+   "text": "The quest log has been updated."
+  },
+  {
+   "id": "t47",
+   "text": "Welcome back, adventurer. The guild hall is open."
+  },
+  {
+   "id": "t48",
+   "text": "Press E to talk to the innkeeper."
+  },
+  {
+   "id": "t49",
+   "text": "Enemy spotted near the east gate, draw your weapons!"
+  }
+ ]
+}

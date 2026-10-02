@@ -368,6 +368,12 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 		return Report;
 	}
 	const EPipelineTask Task = Package->Task;
+	// An out-of-range MaxTokens is already an Error in the report. The smoke runs (and above all the worst case,
+	// which allocates MaxTokens elements per input) would be unsafe with it, so they are skipped; the tokenizer,
+	// CPU/GPU creation and task I/O checks still run.
+	const bool bSmokeUnsafe = Report.HasError(ECode::InvalidMaxTokens);
+	const bool bRunSmoke = Options.bRunSmokeTest && !bSmokeUnsafe;
+	static const TCHAR* const SmokeSkippedInvalidMaxTokens = TEXT("smoke run skipped (MaxTokens is outside 1..65536; fix MaxTokens)");
 
 	// Step 2: tokenizer (text tasks only).
 	TArray<int32> Ids;
@@ -459,7 +465,11 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 	}
 
 	// Step 5: CPU smoke run.
-	if (Options.bRunSmokeTest)
+	if (Options.bRunSmokeTest && bSmokeUnsafe)
+	{
+		Report.DeviceChecks[CpuIndex].Message = FString::Printf(TEXT("CPU: %s"), SmokeSkippedInvalidMaxTokens);
+	}
+	if (bRunSmoke)
 	{
 		const FSmokeOutcome Smoke = RunSmoke(CpuModel, *Package, Bindings, Ids);
 		FPipelineDeviceCheck& Cpu = Report.DeviceChecks[CpuIndex];
@@ -484,9 +494,18 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 					? FString(TEXT("The tokenizer reports no vocabulary. Check the package's tokenizer.json."))
 					: FString::Printf(TEXT("The tokenizer reports no vocabulary (%s). Check the package's tokenizer.json."), *Why));
 			}
+			else if (Package->Preprocess.MaxTokens < 1 || Package->Preprocess.MaxTokens > 65536)
+			{
+				// Defence in depth: never allocate a worst-case input for an out-of-range MaxTokens.
+				const FString Msg = FString::Printf(
+					TEXT("CPU: worst-case input not built: MaxTokens %d is outside 1..65536. Set MaxTokens to the model's position limit."),
+					Package->Preprocess.MaxTokens);
+				Report.DeviceChecks[CpuIndex].Message = Msg;
+				Report.Add(ESev::Error, ECode::SmokeRunFailed, Msg);
+			}
 			else
 			{
-				const int32 MaxTokens = FMath::Max(1, Package->Preprocess.MaxTokens);
+				const int32 MaxTokens = Package->Preprocess.MaxTokens;
 				const int32 TopId = VocabSize - 1;
 				TArray<int32> WorstIds;
 				WorstIds.Init(TopId, MaxTokens);
@@ -540,7 +559,11 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 			else
 			{
 				Report.DeviceChecks[GpuIndex].bCreated = true;
-				if (Options.bRunSmokeTest)
+				if (Options.bRunSmokeTest && bSmokeUnsafe)
+				{
+					Report.DeviceChecks[GpuIndex].Message = FString::Printf(TEXT("GPU: %s"), SmokeSkippedInvalidMaxTokens);
+				}
+				if (bRunSmoke)
 				{
 					const FSmokeOutcome Smoke = RunSmoke(GpuModel, *Package, Bindings, Ids);
 					FPipelineDeviceCheck& Gpu = Report.DeviceChecks[GpuIndex];

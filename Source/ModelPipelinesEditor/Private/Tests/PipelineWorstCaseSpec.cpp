@@ -112,12 +112,8 @@ void FPipelineWorstCaseSpec::CheckWorstCaseFailure(const FString& Id, int32 Expe
 {
 	using namespace PipelineWorstCaseSpecPrivate;
 	// ORT logs its own error when it rejects the worst-case input; those lines are expected.
-	AddExpectedError(TEXT("ONNX Runtime"), EAutomationExpectedErrorFlags::Contains, -1);
-	AddExpectedError(TEXT("Gather"), EAutomationExpectedErrorFlags::Contains, -1);
-	AddExpectedError(TEXT("out of bounds"), EAutomationExpectedErrorFlags::Contains, -1);
-	AddExpectedError(TEXT("Non-zero status code"), EAutomationExpectedErrorFlags::Contains, -1);
-	AddExpectedError(TEXT("worst-case"), EAutomationExpectedErrorFlags::Contains, -1);
-	AddExpectedError(TEXT("SmokeRunFailed"), EAutomationExpectedErrorFlags::Contains, -1);
+	// Anchored so the pattern can never swallow this test's own assertion messages (review WP3.6c).
+	AddExpectedError(TEXT("^Non-zero status code returned while running"), EAutomationExpectedErrorFlags::Contains, -1);
 
 	FString Folder;
 	if (!LoadCaseFolder(Id, Folder)) { return; }
@@ -190,12 +186,8 @@ void FPipelineWorstCaseSpec::Define()
 		// same folder is imported twice (the failure must not depend on leftover state from the first run).
 		It("a second import of small_vocab fails the same way", [this]()
 		{
-			AddExpectedError(TEXT("ONNX Runtime"), EAutomationExpectedErrorFlags::Contains, -1);
-			AddExpectedError(TEXT("Gather"), EAutomationExpectedErrorFlags::Contains, -1);
-			AddExpectedError(TEXT("out of bounds"), EAutomationExpectedErrorFlags::Contains, -1);
-			AddExpectedError(TEXT("Non-zero status code"), EAutomationExpectedErrorFlags::Contains, -1);
-			AddExpectedError(TEXT("worst-case"), EAutomationExpectedErrorFlags::Contains, -1);
-			AddExpectedError(TEXT("SmokeRunFailed"), EAutomationExpectedErrorFlags::Contains, -1);
+			// Anchored so the pattern can never swallow this test's own assertion messages (review WP3.6c).
+			AddExpectedError(TEXT("^Non-zero status code returned while running"), EAutomationExpectedErrorFlags::Contains, -1);
 			FString Folder;
 			if (!LoadCaseFolder(TEXT("small_vocab"), Folder)) { return; }
 			const FPipelineImportResult A = Import(Folder, TEXT("WC_Twice"), true);

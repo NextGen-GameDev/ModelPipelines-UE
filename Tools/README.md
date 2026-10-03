@@ -59,3 +59,20 @@ Text goldens (WP3.3), output `<dev>/goldens/text/text_goldens.json`:
   token ids from `tokenizers` and the per-sentence embedding or logits/scores/label; MiniLM also gets a top-5
   similarity table for the first 5 sentences. Fails if the ONNX/PyTorch gap is too large (cosine < 0.99999, logits
   > 1e-4) or an SST-2 top margin is < 0.01. No network; output is byte-identical on reruns. Runs in about 45-60 s on CPU.
+
+Vision goldens, part A (WP4.1), output `<dev>/goldens/vision/vision_goldens.json` (schema `pipelines-vision-goldens/1`, C30):
+
+- `make_vision_goldens.py [--variant visible|hidden] [--seed N] [--out-dir DIR] [--models-out DIR] [--source-models DIR]`
+  writes 10 deterministic synthetic PNGs (`images/`), 60 Pillow resize results (6 filters x 10 size pairs, `resize/`),
+  52 preprocess cases (7 HF slow-processor configs: tensor `.f32` plus the 8-bit cropped PNG, `preprocess/`) and 4 tiny
+  models with onnxruntime references (`tiny_image_classification`, `tiny_object_detection` from `import_test/`, plus two
+  new designed-output detection models written to `<models-out>/vision_test/tiny_det_designed_{sigmoid,softmax}`; the
+  design table is a comment block in the script). Every preprocess case is cross-checked against an independent
+  implementation of the C27 pixel rules (`cropped` byte-exact, tensor <= 1e-5, else the script exits non-zero with
+  `NEEDS:`). `detections` come from a numpy implementation of the C29 decode rules 1-4 and C26 NMS (float64 IoU);
+  tiny_object_detection cases are skipped when a score is within 0.02 of the threshold or a same-class IoU within 0.02
+  of the NMS threshold (printed, not stored).
+- Hidden variant: `--variant hidden --seed 777 --out-dir <dir> --models-out <dir>` (other images and resize pairs, designed
+  models with 10 queries and labels w/x/y/z; the two importer tiny models are copied into `<models-out>/import_test`).
+  `root` in the JSON is the absolute `--out-dir`, so the JSON bytes depend on that path (rerun into the same path: identical).
+- No network. About 15 s. Tests: `tests/test_vision_goldens.py` (the hidden variant is run into a temp dir).

@@ -75,7 +75,7 @@ namespace PipelineModelFolderSpecPrivate
 
 	static const TCHAR* ResizeName(EPipelineImageResize R)
 	{
-		return R == EPipelineImageResize::Stretch ? TEXT("Stretch") : TEXT("ShortestEdgeCenterCrop");
+		return R == EPipelineImageResize::Stretch ? TEXT("Stretch") : R == EPipelineImageResize::StretchCenterCrop ? TEXT("StretchCenterCrop") : TEXT("ShortestEdgeCenterCrop");
 	}
 
 	static const TCHAR* ActivationName(EPipelineScoreActivation A)
@@ -290,6 +290,8 @@ namespace PipelineModelFolderSpecPrivate
 				CheckInt(TEXT("image_height"), A.ImageHeight);
 				CheckStr(TEXT("resize_mode"), ResizeName(A.ResizeMode));
 				CheckInt(TEXT("resize_shortest_edge"), A.ResizeShortestEdge);
+				CheckInt(TEXT("resize_width"), A.ResizeWidth);
+				CheckInt(TEXT("resize_height"), A.ResizeHeight);
 				double Rs = 0;
 				E->TryGetNumberField(TEXT("rescale_factor"), Rs);
 				CheckFloat(TEXT("rescale_factor"), A.RescaleFactor, Rs);

@@ -186,6 +186,17 @@ bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutRepor
 						Preprocess.ResizeShortestEdge, Needed));
 			}
 		}
+		else if (Preprocess.ResizeMode == EPipelineImageResize::StretchCenterCrop)
+		{
+			const int32 RW = Preprocess.ResizeWidth;
+			const int32 RH = Preprocess.ResizeHeight;
+			if (RW < 1 || RH < 1 || RW > MaxImageSize || RH > MaxImageSize || RW < Width || RH < Height)
+			{
+				AddError(EPipelineValidationCode::InvalidResize,
+					FString::Printf(TEXT("ResizeWidth x ResizeHeight is %dx%d; with StretchCenterCrop it must be at least ImageWidth x ImageHeight = %dx%d and at most %d"),
+						RW, RH, Width, Height, MaxImageSize));
+			}
+		}
 	}
 
 	if (IsBlank(License.SpdxId))

@@ -38,7 +38,9 @@ UENUM(BlueprintType)
 enum class EPipelineImageResize : uint8
 {
 	Stretch = 0,
-	ShortestEdgeCenterCrop = 1
+	ShortestEdgeCenterCrop = 1,
+	/** Resize to exactly ResizeWidth x ResizeHeight (aspect not kept), then center-crop ImageWidth x ImageHeight (DeiT style). */
+	StretchCenterCrop = 2
 };
 
 /** Activation applied to classification and detection logits. */
@@ -101,6 +103,14 @@ struct MODELPIPELINESCORE_API FPipelinePreprocessSettings
 	/** ShortestEdgeCenterCrop: resize so the shortest edge is this, keep aspect, then center-crop ImageWidth x ImageHeight. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Image")
 	int32 ResizeShortestEdge = 0;
+
+	/** StretchCenterCrop: width to resize to before the center crop. 0 in the other modes. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Image")
+	int32 ResizeWidth = 0;
+
+	/** StretchCenterCrop: height to resize to before the center crop. 0 in the other modes. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Image")
+	int32 ResizeHeight = 0;
 
 	/** Image tasks: factor applied to 0..255 pixel values. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Image")

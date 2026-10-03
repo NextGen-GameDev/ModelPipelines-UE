@@ -434,7 +434,95 @@ namespace UE::ModelPipelines::FolderPrivate
 		return ERead::Invalid;
 	}
 
-	/** Rule 7: image settings from preprocessor_config.json. */
+	/** C25: processors whose integer `size` means {shortest_edge: S} (union of both transformers 4.57.6 scans). */
+	static bool IsShortestEdgeIntClass(const FString& Cls)
+	{
+		static const TCHAR* const Classes[] = {
+			TEXT("BitImageProcessor"), TEXT("BlipImageProcessor"), TEXT("BridgeTowerImageProcessor"), TEXT("ChameleonImageProcessor"),
+			TEXT("ChineseCLIPImageProcessor"), TEXT("CLIPImageProcessor"), TEXT("ConditionalDetrImageProcessor"), TEXT("ConvNextImageProcessor"),
+			TEXT("DeepseekVLImageProcessor"), TEXT("DeformableDetrImageProcessor"), TEXT("DetaImageProcessor"), TEXT("DetrImageProcessor"),
+			TEXT("EfficientLoFTRImageProcessor"), TEXT("EomtImageProcessor"), TEXT("GotOcr2ImageProcessor"), TEXT("GroundingDinoImageProcessor"),
+			TEXT("InstructBlipVideoImageProcessor"), TEXT("JanusImageProcessor"), TEXT("LevitImageProcessor"), TEXT("LightGlueImageProcessor"), TEXT("LlavaImageProcessor"),
+			TEXT("LlavaNextImageProcessor"), TEXT("LlavaNextVideoImageProcessor"), TEXT("LlavaOnevisionImageProcessor"), TEXT("Mask2FormerImageProcessor"),
+			TEXT("MaskFormerImageProcessor"), TEXT("MobileNetV1ImageProcessor"), TEXT("MobileNetV2ImageProcessor"), TEXT("MobileViTImageProcessor"),
+			TEXT("OneFormerImageProcessor"), TEXT("Ovis2ImageProcessor"), TEXT("PoolFormerImageProcessor"), TEXT("RTDetrImageProcessor"), TEXT("SuperGlueImageProcessor"),
+			TEXT("SuperPointImageProcessor"), TEXT("TextNetImageProcessor"), TEXT("TvltImageProcessor"), TEXT("TvpImageProcessor"), TEXT("VideoLlavaImageProcessor"),
+			TEXT("VideoMAEImageProcessor"), TEXT("ViltImageProcessor"), TEXT("ViTHybridImageProcessor"), TEXT("VivitImageProcessor"), TEXT("YolosImageProcessor"),
+		};
+		static_assert(UE_ARRAY_COUNT(Classes) == 44, "C25 lists 44 ShortestEdgeIntClasses");
+		for (const TCHAR* C : Classes)
+		{
+			if (Cls.Equals(C, ESearchCase::CaseSensitive))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** String value of Key, or "" when absent or not a string (no report message: the class name is only a hint). */
+	static FString StringOrEmpty(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key)
+	{
+		FString S;
+		const TSharedPtr<FJsonValue> V = GetValue(Obj, Key);
+		if (!V.IsValid() || V->Type != EJson::String || !V->TryGetString(S))
+		{
+			return FString();
+		}
+		return S;
+	}
+
+	/**
+	 * C25: processor class from image_processor_type, else feature_extractor_type with FeatureExtractor -> ImageProcessor;
+	 * a trailing "Fast" is removed. "" when neither key holds a string.
+	 */
+	static FString ProcessorClassName(const TSharedPtr<FJsonObject>& Pre)
+	{
+		FString Cls = StringOrEmpty(Pre, TEXT("image_processor_type"));
+		if (Cls.IsEmpty())
+		{
+			Cls = StringOrEmpty(Pre, TEXT("feature_extractor_type"));
+			static const TCHAR* const FE = TEXT("FeatureExtractor");
+			if (Cls.EndsWith(FE, ESearchCase::CaseSensitive))
+			{
+				Cls = Cls.LeftChop(FCString::Strlen(FE)) + TEXT("ImageProcessor");
+			}
+		}
+		if (Cls.EndsWith(TEXT("Fast"), ESearchCase::CaseSensitive))
+		{
+			Cls.LeftChopInline(4);
+		}
+		return Cls;
+	}
+
+	/** C25 rule 2: size {height RH, width RW}; StretchCenterCrop with a usable crop, else Stretch RW x RH. */
+	static void ApplyHeightWidthSize(FContext& Ctx, const TSharedPtr<FJsonObject>& Pre, const TCHAR* File, int32 RW, int32 RH, FPipelinePreprocessSettings& P)
+	{
+		bool bCenterCrop = false;
+		ReadBool(Ctx, Pre, File, TEXT("do_center_crop"), bCenterCrop);
+		int32 CropW = 0, CropH = 0;
+		const ERead CropRead = bCenterCrop ? ReadCropSize(Ctx, Pre, File, CropW, CropH) : ERead::Absent;
+		if (CropRead == ERead::Ok)
+		{
+			P.ResizeMode = EPipelineImageResize::StretchCenterCrop;
+			P.ResizeWidth = RW;
+			P.ResizeHeight = RH;
+			P.ResizeShortestEdge = 0;
+			P.ImageWidth = CropW;
+			P.ImageHeight = CropH;
+		}
+		else if (CropRead == ERead::Absent)
+		{
+			P.ResizeMode = EPipelineImageResize::Stretch;
+			P.ResizeWidth = 0;
+			P.ResizeHeight = 0;
+			P.ImageWidth = RW;
+			P.ImageHeight = RH;
+		}
+		// ERead::Invalid: the InvalidJson error is already in the report.
+	}
+
+	/** Rule 7 (C25 rules 1-5): image settings from preprocessor_config.json. */
 	static void ReadImageSettings(FContext& Ctx, const TSharedPtr<FJsonObject>& Pre, FPipelinePreprocessSettings& P)
 	{
 		static const TCHAR* const File = TEXT("preprocessor_config.json");
@@ -467,9 +555,8 @@ namespace UE::ModelPipelines::FolderPrivate
 					const bool bW = ValueToInt(Ctx, WV, Where(File, TEXT("size.width")), W);
 					if (bH && bW)
 					{
-						P.ImageWidth = W;
-						P.ImageHeight = H;
-						P.ResizeMode = EPipelineImageResize::Stretch;
+						// Rule 2.
+						ApplyHeightWidthSize(Ctx, Pre, File, W, H, P);
 					}
 				}
 				else if (SEV.IsValid())
@@ -494,6 +581,7 @@ namespace UE::ModelPipelines::FolderPrivate
 				const ERead CropPctRead = ReadNumber(Ctx, Pre, File, TEXT("crop_pct"), CropPct);
 				if (CropPctRead == ERead::Ok)
 				{
+					// Rule 1 (ConvNext), unchanged.
 					if (!(CropPct > 0.0))
 					{
 						Ctx.Error(ECode::InvalidJson, FString::Printf(TEXT("%s: crop_pct must be > 0, found %.17g. Fix the value in the file."), File, CropPct));
@@ -504,38 +592,61 @@ namespace UE::ModelPipelines::FolderPrivate
 						const double R = FMath::Clamp((double)S / CropPct, (double)MIN_int32, (double)MAX_int32);
 						P.ResizeMode = EPipelineImageResize::ShortestEdgeCenterCrop;
 						P.ResizeShortestEdge = (int32)R;
+						P.ResizeWidth = 0;
+						P.ResizeHeight = 0;
 						P.ImageWidth = S;
 						P.ImageHeight = S;
 					}
 					else
 					{
 						P.ResizeMode = EPipelineImageResize::Stretch;
+						P.ResizeWidth = 0;
+						P.ResizeHeight = 0;
 						P.ImageWidth = S;
 						P.ImageHeight = S;
 					}
 				}
 				else if (CropPctRead == ERead::Absent)
 				{
-					bool bCenterCrop = false;
-					ReadBool(Ctx, Pre, File, TEXT("do_center_crop"), bCenterCrop);
-					int32 CropW = 0, CropH = 0;
-					const ERead CropRead = bCenterCrop ? ReadCropSize(Ctx, Pre, File, CropW, CropH) : ERead::Absent;
-					if (CropRead == ERead::Ok)
+					const FString Cls = bShortestEdgeObject ? FString() : ProcessorClassName(Pre);
+					if (!bShortestEdgeObject && !Cls.IsEmpty() && !IsShortestEdgeIntClass(Cls))
 					{
-						P.ResizeMode = EPipelineImageResize::ShortestEdgeCenterCrop;
-						P.ResizeShortestEdge = S;
-						P.ImageWidth = CropW;
-						P.ImageHeight = CropH;
+						// Rule 3: HF's square default for an integer size, i.e. {height S, width S}.
+						ApplyHeightWidthSize(Ctx, Pre, File, S, S, P);
 					}
-					else if (CropRead == ERead::Absent)
+					else
 					{
-						P.ResizeMode = EPipelineImageResize::Stretch;
-						P.ImageWidth = S;
-						P.ImageHeight = S;
-						if (bShortestEdgeObject)
+						// Rule 4: shortest-edge reading.
+						bool bCenterCrop = false;
+						ReadBool(Ctx, Pre, File, TEXT("do_center_crop"), bCenterCrop);
+						int32 CropW = 0, CropH = 0;
+						const ERead CropRead = bCenterCrop ? ReadCropSize(Ctx, Pre, File, CropW, CropH) : ERead::Absent;
+						if (CropRead == ERead::Ok)
 						{
-							Ctx.Warn(ECode::UnsupportedResize, FString::Printf(TEXT("%s: size {shortest_edge: %d} without crop_pct or do_center_crop/crop_size cannot be represented; using %dx%d Stretch. Check the package's image settings."),
-								File, S, S, S));
+							P.ResizeMode = EPipelineImageResize::ShortestEdgeCenterCrop;
+							P.ResizeShortestEdge = S;
+							P.ResizeWidth = 0;
+							P.ResizeHeight = 0;
+							P.ImageWidth = CropW;
+							P.ImageHeight = CropH;
+						}
+						else if (CropRead == ERead::Absent)
+						{
+							P.ResizeMode = EPipelineImageResize::Stretch;
+							P.ResizeWidth = 0;
+							P.ResizeHeight = 0;
+							P.ImageWidth = S;
+							P.ImageHeight = S;
+							if (bShortestEdgeObject)
+							{
+								Ctx.Warn(ECode::UnsupportedResize, FString::Printf(TEXT("%s: size {shortest_edge: %d} without crop_pct or do_center_crop/crop_size cannot be represented; using %dx%d Stretch. Check the package's image settings."),
+									File, S, S, S));
+							}
+							else if (!Cls.IsEmpty())
+							{
+								Ctx.Warn(ECode::UnsupportedResize, FString::Printf(TEXT("%s: %s resizes an integer size %d by its shortest edge (aspect kept), which cannot be represented without do_center_crop/crop_size; using %dx%d Stretch. Check the package's image settings."),
+									File, *Cls, S, S, S));
+							}
 						}
 					}
 				}

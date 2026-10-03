@@ -152,12 +152,13 @@ def test_schema_keys(doc):
     assert set(doc["generator"]) == {"script", "variant", "transformers", "onnx", "onnxruntime"}
     assert os.path.isabs(doc["models_root"])
     ids = [c["id"] for c in doc["cases"]]
-    assert len(ids) == len(set(ids)) and len(ids) >= 15
+    assert len(ids) == len(set(ids)) and len(ids) >= 20
     base = {"id", "folder", "reference", "task_override", "expect", "error_codes"}
     full = base | {"warning_codes", "task", "task_source", "model_file", "labels", "preprocess", "license",
                    "preferred_device", "onnx"}
     pre = {"max_tokens", "add_special_tokens", "pooling", "normalize_embeddings", "image_width", "image_height",
-           "resize_mode", "resize_shortest_edge", "rescale_factor", "image_mean", "image_std", "score_activation"}
+           "resize_mode", "resize_shortest_edge", "resize_width", "resize_height",
+           "rescale_factor", "image_mean", "image_std", "score_activation"}
     for c in doc["cases"]:
         assert c["expect"] in ("valid", "validation_error", "parse_error")
         assert set(c) == (base if c["expect"] == "parse_error" else full), c["id"]
@@ -184,7 +185,7 @@ def test_valid_tiny_onnx_blocks_match_files(doc):
         path = os.path.join(_root(doc, c), c["folder"], c["model_file"])
         assert m.onnx_block(path) == c["onnx"], c["id"]
         n += 1
-    assert n == 7
+    assert n == 12
 
 
 def test_tiny_models_check_and_run(doc):
@@ -337,3 +338,119 @@ def test_reference_text_models_pass_worst_case(doc, slug):
     hello_ok, worst_ok, err = m.worst_case_run(os.path.join(folder, c["model_file"]),
                                                os.path.join(folder, "tokenizer.json"), c["preprocess"]["max_tokens"])
     assert hello_ok and worst_ok, err
+
+
+# ---- WP4.0a / C25 resize-then-crop ------------------------------------------------------------------------------------
+
+def _fields(r):
+    return (r["resize_mode"], r["resize_width"], r["resize_height"], r["resize_shortest_edge"],
+            r["image_width"], r["image_height"])
+
+
+def test_c25_deit_int_size_with_crop():
+    r = m.image_preprocess({"image_processor_type": "DeiTImageProcessor", "size": 256, "do_center_crop": True,
+                            "crop_size": 224})
+    assert _fields(r) == ("StretchCenterCrop", 256, 256, 0, 224, 224)
+
+
+def test_c25_legacy_feature_extractor_name():
+    assert m.processor_class_name({"feature_extractor_type": "DeiTFeatureExtractor"}) == "DeiTImageProcessor"
+    assert m.processor_class_name({"image_processor_type": "ViTImageProcessorFast"}) == "ViTImageProcessor"
+    assert m.processor_class_name({"image_processor_type": "A", "feature_extractor_type": "BFeatureExtractor"}) == "A"
+    assert m.processor_class_name({}) == ""
+    r = m.image_preprocess({"feature_extractor_type": "DeiTFeatureExtractor", "size": 256, "do_center_crop": True,
+                            "crop_size": 224})
+    assert _fields(r) == ("StretchCenterCrop", 256, 256, 0, 224, 224)
+
+
+def test_c25_height_width_with_crop():
+    r = m.image_preprocess({"size": {"height": 240, "width": 260}, "do_center_crop": True,
+                            "crop_size": {"height": 224, "width": 200}})
+    assert _fields(r) == ("StretchCenterCrop", 260, 240, 0, 200, 224)
+
+
+def test_c25_height_width_without_crop_is_stretch():
+    r = m.image_preprocess({"size": {"height": 224, "width": 224}, "do_center_crop": False})
+    assert _fields(r) == ("Stretch", 0, 0, 0, 224, 224)
+    r = m.image_preprocess({"size": {"height": 30, "width": 20}, "do_center_crop": True})  # no crop_size
+    assert _fields(r) == ("Stretch", 0, 0, 0, 20, 30)
+
+
+def test_c25_shortest_edge_class_with_crop():
+    r = m.image_preprocess({"image_processor_type": "CLIPImageProcessor", "size": 256, "do_center_crop": True,
+                            "crop_size": 224})
+    assert _fields(r) == ("ShortestEdgeCenterCrop", 0, 0, 256, 224, 224)
+
+
+def test_c25_empty_class_integer_keeps_shortest_edge_rule():
+    r = m.image_preprocess({"size": 256, "do_center_crop": True, "crop_size": 224})
+    assert _fields(r) == ("ShortestEdgeCenterCrop", 0, 0, 256, 224, 224)
+
+
+def test_c25_square_integer_without_crop():
+    r = m.image_preprocess({"image_processor_type": "DeiTImageProcessor", "size": 32, "do_center_crop": False})
+    assert _fields(r) == ("Stretch", 0, 0, 0, 32, 32)
+
+
+def test_c25_crop_pct_beats_class_rule():
+    r = m.image_preprocess({"image_processor_type": "DeiTImageProcessor", "size": 224, "crop_pct": 0.875})
+    assert r["resize_mode"] == "ShortestEdgeCenterCrop" and r["resize_shortest_edge"] == 256
+
+
+def test_c25_other_modes_have_zero_resize_size():
+    for pre in ({"size": 224, "crop_pct": 0.875}, {"size": 100}, None,
+                {"size": {"shortest_edge": 8}, "do_center_crop": True, "crop_size": 4}):
+        r = m.image_preprocess(pre)
+        assert r["resize_width"] == 0 and r["resize_height"] == 0
+
+
+def test_shortest_edge_int_classes_match_installed_transformers():
+    assert len(m.SHORTEST_EDGE_INT_CLASSES) == 44
+    assert (m.scan_shortest_edge_classes() | m.scan_shortest_edge_classes_empirical()) == set(m.SHORTEST_EDGE_INT_CLASSES)
+
+
+EXPECTED_C25 = {
+    "visible": {"deit_style": ("StretchCenterCrop", 40, 40, 0, 32, 32),
+                "deit_hw_crop": ("StretchCenterCrop", 48, 40, 0, 36, 32),
+                "deit_legacy_fe": ("StretchCenterCrop", 40, 40, 0, 32, 32),
+                "clip_style_crop": ("ShortestEdgeCenterCrop", 0, 0, 40, 32, 32),
+                "square_int_nocrop": ("Stretch", 0, 0, 0, 32, 32)},
+    "hidden": {"deit_style": ("StretchCenterCrop", 52, 52, 0, 44, 44),
+               "deit_hw_crop": ("StretchCenterCrop", 60, 50, 0, 48, 40),
+               "deit_legacy_fe": ("StretchCenterCrop", 52, 52, 0, 44, 44),
+               "clip_style_crop": ("ShortestEdgeCenterCrop", 0, 0, 52, 44, 44),
+               "square_int_nocrop": ("Stretch", 0, 0, 0, 44, 44)},
+}
+
+
+def _check_c25_cases(doc, variant):
+    by_id = {c["id"]: c for c in doc["cases"]}
+    root = doc.get("import_root", doc["models_root"])
+    for case_id, want in EXPECTED_C25[variant].items():
+        c = by_id[case_id]
+        assert c["expect"] == "valid" and c["error_codes"] == [] and c["warning_codes"] == [], case_id
+        assert c["task"] == "ImageClassification" and len(c["labels"]) == 3
+        assert _fields(c["preprocess"]) == want, case_id
+        shape = c["onnx"]["inputs"][0]["shape"]
+        assert c["onnx"]["inputs"][0]["name"] == "pixel_values"
+        assert shape == [-1, 3, want[5], want[4]], case_id
+        assert c["license"]["spdx_id"] == "Apache-2.0"
+        assert os.path.isfile(os.path.join(root, c["folder"], "model.onnx"))
+
+
+def test_c25_cases_visible(doc):
+    _check_c25_cases(doc, "visible")
+
+
+def test_c25_cases_hidden_variant(tmp_path):
+    import subprocess
+    out = tmp_path / "models"
+    gold = tmp_path / "import_expectations.json"
+    r = subprocess.run([sys.executable, os.path.join(TOOLS, "make_import_test_data.py"), "--variant", "hidden",
+                        "--out-models", str(out), "--out-goldens", str(gold)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if "NEEDS:" in (r.stderr + r.stdout):
+        pytest.skip("hidden tokenizers missing")
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    with open(gold, "r", encoding="utf-8") as f:
+        _check_c25_cases(json.load(f), "hidden")

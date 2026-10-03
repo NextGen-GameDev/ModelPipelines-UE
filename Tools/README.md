@@ -27,10 +27,18 @@ Importer test data (WP2.1), output under `<dev>/`:
   models into `<dev>/models/reference/<slug>/` (the repo's own files unchanged + `modelpipelines.json` + `model.onnx`),
   runs a onnxruntime-vs-torch check (fails above 1e-3), and writes `<dev>/models/reference/manifest.json`.
   HF cache goes to `<dev>/cache/hf`. Skips models whose `model.onnx` sha256 matches the manifest.
-- `make_import_test_data.py [--variant visible|hidden] [--out-models DIR] [--out-goldens FILE]` writes the 17 tiny
+- `make_import_test_data.py [--variant visible|hidden] [--out-models DIR] [--out-goldens FILE]` writes the 22 tiny
   importer folders to `<out-models>/import_test/` and the expectations JSON
   (`<dev>/goldens/import/import_expectations.json`), adding the reference cases when those folders exist. Reference
   cases are cross-checked against transformers; a disagreement fails the script.
+  Resize-then-crop cases (WP4.0a, contract C25), tiny 3-label ImageClassification models: `deit_style` (DeiT, `size 40`,
+  crop 32 -> StretchCenterCrop 40x40, image 32x32), `deit_hw_crop` (`{h 40, w 48}` + crop `{h 32, w 36}`),
+  `deit_legacy_fe` (`feature_extractor_type DeiTFeatureExtractor`, as `deit_style`), `clip_style_crop` (CLIP, int size +
+  crop -> ShortestEdgeCenterCrop 40, image 32x32) and `square_int_nocrop` (DeiT, `size 32`, no crop -> Stretch 32x32).
+  Hidden variant uses other sizes (52/44, `{h 50, w 60}`/`{h 40, w 48}`). Each case is cross-checked against
+  `AutoImageProcessor` (size, crop_size, do_center_crop, output shape for a 300x200 image). `preprocess` has
+  `resize_width`/`resize_height` (0 unless StretchCenterCrop). A pytest re-scans transformers for the
+  ShortestEdgeIntClasses list (union of a source scan and an empirical size=40 scan) (`SHORTEST_EDGE_INT_CLASSES`).
   Worst-case cases (WP3.6b): `small_vocab` (Gather table 30000 rows, hidden: vocab-1000) and `short_positions`
   (position table 32 rows, hidden 16; MaxTokens 64, hidden 48) pass a Hello world run but fail the worst case
   (`SmokeRunFailed`); the script checks this on onnxruntime and also runs the worst case on the two reference text models.

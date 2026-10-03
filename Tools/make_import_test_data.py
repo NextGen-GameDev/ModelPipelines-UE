@@ -121,35 +121,97 @@ def text_max_tokens(sbert, tokenizer_config, config):
     return value
 
 
+# C25: union of (a) classes whose HF code calls get_size_dict(size, default_to_square=False) and (b) classes whose
+# constructor turns size=40 into {shortest_edge: 40}: an integer `size` is the shortest edge there. Any other class
+# treats an integer as a square. Pinned by a pytest that re-scans transformers.
+SHORTEST_EDGE_INT_CLASSES = frozenset("""
+BitImageProcessor BlipImageProcessor BridgeTowerImageProcessor ChameleonImageProcessor
+ChineseCLIPImageProcessor CLIPImageProcessor ConditionalDetrImageProcessor ConvNextImageProcessor
+DeepseekVLImageProcessor DeformableDetrImageProcessor DetaImageProcessor DetrImageProcessor
+EfficientLoFTRImageProcessor EomtImageProcessor GotOcr2ImageProcessor GroundingDinoImageProcessor
+InstructBlipVideoImageProcessor JanusImageProcessor LevitImageProcessor LightGlueImageProcessor LlavaImageProcessor
+LlavaNextImageProcessor LlavaNextVideoImageProcessor LlavaOnevisionImageProcessor Mask2FormerImageProcessor
+MaskFormerImageProcessor MobileNetV1ImageProcessor MobileNetV2ImageProcessor MobileViTImageProcessor
+OneFormerImageProcessor Ovis2ImageProcessor PoolFormerImageProcessor RTDetrImageProcessor SuperGlueImageProcessor
+SuperPointImageProcessor TextNetImageProcessor TvltImageProcessor TvpImageProcessor VideoLlavaImageProcessor
+VideoMAEImageProcessor ViltImageProcessor ViTHybridImageProcessor VivitImageProcessor YolosImageProcessor
+""".split())
+
+
+def processor_class_name(pre):
+    """C25: image_processor_type, else feature_extractor_type with FeatureExtractor -> ImageProcessor; trailing Fast
+    removed; "" if neither key is a string."""
+    name = ""
+    v = (pre or {}).get("image_processor_type")
+    if isinstance(v, str) and v:
+        name = v
+    else:
+        v = (pre or {}).get("feature_extractor_type")
+        if isinstance(v, str) and v:
+            name = v[:-len("FeatureExtractor")] + "ImageProcessor" if v.endswith("FeatureExtractor") else v
+    if name.endswith("Fast"):
+        name = name[:-len("Fast")]
+    return name
+
+
+def _is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _usable_crop(pre):
+    """(w, h) if do_center_crop is true and crop_size is an integer or {height, width}; else None."""
+    crop = pre.get("crop_size")
+    if not pre.get("do_center_crop") or crop is None:
+        return None
+    if isinstance(crop, dict):
+        if "height" in crop and "width" in crop:
+            return int(crop["width"]), int(crop["height"])
+        return None
+    if _is_int(crop):
+        return int(crop), int(crop)
+    return None
+
+
 def image_preprocess(pre):
-    """Image fields from a preprocessor_config dict (None = file missing)."""
+    """Image fields from a preprocessor_config dict (None = file missing). Implements C14 rule 7 as replaced by C25."""
     out = {"image_width": 224, "image_height": 224, "resize_mode": "Stretch", "resize_shortest_edge": 0,
+           "resize_width": 0, "resize_height": 0,
            "rescale_factor": F32_255, "image_mean": list(IMAGENET_MEAN), "image_std": list(IMAGENET_STD)}
     if pre is None:
         return out
     size = pre.get("size")
+    cls = processor_class_name(pre)
+    hw = None  # (rw, rh) from an object size or a square-default integer
     shortest = None
     if isinstance(size, dict) and "height" in size and "width" in size:
-        out["image_width"], out["image_height"] = int(size["width"]), int(size["height"])
-    else:
-        if isinstance(size, dict) and "shortest_edge" in size:
-            shortest = int(size["shortest_edge"])
-        elif isinstance(size, int) and not isinstance(size, bool):
+        hw = (int(size["width"]), int(size["height"]))
+    elif isinstance(size, dict) and "shortest_edge" in size:
+        shortest = int(size["shortest_edge"])
+    elif _is_int(size):
+        if cls and "crop_pct" not in pre and cls not in SHORTEST_EDGE_INT_CLASSES:
+            hw = (size, size)  # rule 3
+        else:
             shortest = size
-        crop = pre.get("crop_size")
-        if shortest is not None and "crop_pct" in pre:
-            if shortest < 384:
-                out["resize_mode"] = "ShortestEdgeCenterCrop"
-                out["resize_shortest_edge"] = int(shortest / pre["crop_pct"])
-            out["image_width"] = out["image_height"] = shortest
-        elif pre.get("do_center_crop") and crop is not None and shortest is not None:
+    if shortest is not None and "crop_pct" in pre:  # rule 1
+        if shortest < 384:
+            out["resize_mode"] = "ShortestEdgeCenterCrop"
+            out["resize_shortest_edge"] = int(shortest / pre["crop_pct"])
+        out["image_width"] = out["image_height"] = shortest
+    elif hw is not None:  # rules 2, 3
+        crop = _usable_crop(pre)
+        if crop is not None:
+            out["resize_mode"] = "StretchCenterCrop"
+            out["resize_width"], out["resize_height"] = hw
+            out["image_width"], out["image_height"] = crop
+        else:
+            out["image_width"], out["image_height"] = hw
+    elif shortest is not None:  # rule 4
+        crop = _usable_crop(pre)
+        if crop is not None:
             out["resize_mode"] = "ShortestEdgeCenterCrop"
             out["resize_shortest_edge"] = shortest
-            if isinstance(crop, dict):
-                out["image_width"], out["image_height"] = int(crop["width"]), int(crop["height"])
-            else:
-                out["image_width"] = out["image_height"] = int(crop)
-        elif shortest is not None:
+            out["image_width"], out["image_height"] = crop
+        else:
             out["image_width"] = out["image_height"] = shortest
     if pre.get("do_rescale", True):
         out["rescale_factor"] = float(np.float32(pre.get("rescale_factor", 1.0 / 255.0)))
@@ -162,6 +224,64 @@ def image_preprocess(pre):
         out["image_mean"] = [0.0, 0.0, 0.0]
         out["image_std"] = [1.0, 1.0, 1.0]
     return out
+
+
+def scan_shortest_edge_classes():
+    """Re-scan the installed transformers: classes in transformers/models/*/image_processing_*.py (no _fast) with a
+    method that calls get_size_dict(size, default_to_square=False) where `size` is the first positional argument and
+    the only other keyword allowed is max_size=self._something. Calls with param_name= (Siglip, Gemma3) or a plain
+    max_size parameter (the DETR family) do not count; that is how C25's list for transformers 4.57.6 was built. The
+    call sits in __init__ for most classes and in preprocess/resize for a few (Blip, Tvp)."""
+    import ast
+    import glob
+    import transformers
+    root = os.path.join(os.path.dirname(transformers.__file__), "models")
+    found = set()
+    for path in sorted(glob.glob(os.path.join(root, "*", "image_processing_*.py"))):
+        if path.endswith("_fast.py"):
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        for node in tree.body:  # top-level classes
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for call in ast.walk(node):
+                if not (isinstance(call, ast.Call) and getattr(call.func, "id", getattr(call.func, "attr", "")) == "get_size_dict"):
+                    continue
+                kws = {kw.arg: kw.value for kw in call.keywords}
+                dts = kws.get("default_to_square")
+                first = call.args[0] if call.args else None
+                max_size = kws.get("max_size")
+                if (isinstance(dts, ast.Constant) and dts.value is False
+                        and isinstance(first, ast.Name) and first.id == "size"
+                        and set(kws) <= {"default_to_square", "max_size"}
+                        and (max_size is None or isinstance(max_size, ast.Attribute))):
+                    found.add(node.name)
+    return found
+
+
+def scan_shortest_edge_classes_empirical():
+    """C25 scan (b): every non-Fast class in IMAGE_PROCESSOR_MAPPING_NAMES is built with size=40 (classes that raise
+    are skipped); it counts when the resulting .size is a dict with shortest_edge and no height."""
+    import transformers
+    from transformers.models.auto.image_processing_auto import IMAGE_PROCESSOR_MAPPING_NAMES
+    names = set()
+    for v in IMAGE_PROCESSOR_MAPPING_NAMES.values():
+        for n in (v if isinstance(v, (list, tuple)) else [v]):
+            if n and not n.endswith("Fast"):
+                names.add(n)
+    found = set()
+    for n in sorted(names):
+        cls = getattr(transformers, n, None)
+        if cls is None:
+            continue
+        try:
+            size = cls(size=40).size
+        except Exception:
+            continue
+        if isinstance(size, dict) and "shortest_edge" in size and "height" not in size:
+            found.add(n)
+    return found
 
 
 def score_activation(task, config):
@@ -367,7 +487,8 @@ def params(variant):
             img_mean=[0.5, 0.4, 0.3], img_std=[0.2, 0.25, 0.3],
             det_h=32, det_w=32, det_q=5, det_labels=["person", "crate"],
             two_labels=["NEGATIVE", "POSITIVE"], mismatch_labels=["yes", "no"],
-            small_vocab_rows=30000, pos_rows=32, pos_sbert=64)
+            small_vocab_rows=30000, pos_rows=32, pos_sbert=64,
+            deit=dict(size=40, crop=32, hw_size=(48, 40), hw_crop=(36, 32), nocrop=32))
     return dict(
         emb_hidden=6, emb_tok="t5-small", cls_tok="gpt2",
         cls_labels=["sunny", "rain", "ñandú", "snow", "fog"], cls_max_pos=96,
@@ -376,7 +497,8 @@ def params(variant):
         img_mean=[0.45, 0.5, 0.55], img_std=[0.25, 0.2, 0.15],
         det_h=48, det_w=40, det_q=7, det_labels=["drone", "kite", "balloon"],
         two_labels=["BAD", "GOOD"], mismatch_labels=["lo", "mid", "hi", "top"],
-        small_vocab_rows=-1000, pos_rows=16, pos_sbert=48)
+        small_vocab_rows=-1000, pos_rows=16, pos_sbert=48,
+        deit=dict(size=52, crop=44, hw_size=(60, 50), hw_crop=(48, 40), nocrop=44))
 
 
 def jbytes(obj):
@@ -647,6 +769,36 @@ class Builder:
         self.add("short_positions", "validation_error", errors=["SmokeRunFailed"])
 
 
+        # C25 resize-then-crop cases: tiny image classifiers whose input is the crop / stretch size
+        dp = p["deit"]
+        labels3 = ["cat", "dog", "fox"]
+        common = {"do_resize": True, "do_rescale": True, "rescale_factor": 0.00392156862745098, "do_normalize": True,
+                  "image_mean": p["img_mean"], "image_std": p["img_std"]}
+        hw = lambda wh: {"height": wh[1], "width": wh[0]}  # noqa: E731
+        c25 = [
+            ("deit_style", dict(image_processor_type="DeiTImageProcessor", size=dp["size"], do_center_crop=True,
+                                crop_size=dp["crop"]), (dp["crop"], dp["crop"])),
+            ("deit_hw_crop", dict(image_processor_type="DeiTImageProcessor", size=hw(dp["hw_size"]),
+                                  do_center_crop=True, crop_size=hw(dp["hw_crop"])), dp["hw_crop"]),
+            ("deit_legacy_fe", dict(feature_extractor_type="DeiTFeatureExtractor", size=dp["size"],
+                                    do_center_crop=True, crop_size=dp["crop"]), (dp["crop"], dp["crop"])),
+            ("clip_style_crop", dict(image_processor_type="CLIPImageProcessor", size=dp["size"], do_center_crop=True,
+                                     crop_size=dp["crop"]), (dp["crop"], dp["crop"])),
+            ("square_int_nocrop", dict(image_processor_type="DeiTImageProcessor", size=dp["nocrop"],
+                                       do_center_crop=False), (dp["nocrop"], dp["nocrop"])),
+        ]
+        for case_id, pre, (mw, mh) in c25:
+            d = self.folder(case_id)
+            build_image_classification(os.path.join(d, "model.onnx"), mh, mw, len(labels3))
+            self.models_seen[case_id] = ("image", None)
+            self.write(d, "config.json", jbytes(self.img_config(labels3)))
+            body = dict(pre)
+            body.update(common)
+            self.write(d, "preprocessor_config.json", jbytes(body))
+            self.write(d, "modelpipelines.json", jbytes(full_license(case_id)))
+            self.add(case_id, "valid")
+
+
 # ----------------------------------------------------------------------------------------------------------------
 # Expectations derived from files
 # ----------------------------------------------------------------------------------------------------------------
@@ -872,6 +1024,41 @@ def crosscheck_reference(slug, folder, exp):
     print("  cross-checked %s against transformers %s" % (slug, transformers.__version__))
 
 
+C25_CASES = ["deit_style", "deit_hw_crop", "deit_legacy_fe", "clip_style_crop", "square_int_nocrop"]
+
+
+def crosscheck_c25(case_id, folder, pp):
+    """The derived mode/sizes must agree with AutoImageProcessor.from_pretrained(folder) and a run on a 300x200 image."""
+    from PIL import Image
+    from transformers import AutoImageProcessor
+    proc = AutoImageProcessor.from_pretrained(folder)
+    out = proc(images=Image.new("RGB", (300, 200), (10, 120, 200)), return_tensors="np")["pixel_values"]
+    oh, ow = out.shape[-2:]
+    mode = pp["resize_mode"]
+    size = proc.size
+    ok = True
+    if mode == "StretchCenterCrop":
+        ok = (bool(proc.do_center_crop) and size.get("height") == pp["resize_height"]
+              and size.get("width") == pp["resize_width"]
+              and proc.crop_size.get("height") == pp["image_height"] and proc.crop_size.get("width") == pp["image_width"]
+              and (oh, ow) == (pp["image_height"], pp["image_width"]) and pp["resize_shortest_edge"] == 0)
+    elif mode == "ShortestEdgeCenterCrop":
+        ok = (bool(proc.do_center_crop) and size.get("shortest_edge") == pp["resize_shortest_edge"]
+              and (oh, ow) == (pp["image_height"], pp["image_width"])
+              and pp["resize_width"] == 0 and pp["resize_height"] == 0)
+    else:
+        ok = (not getattr(proc, "do_center_crop", False) and size.get("height") == pp["image_height"]
+              and size.get("width") == pp["image_width"] and (oh, ow) == (pp["image_height"], pp["image_width"])
+              and pp["resize_width"] == 0 and pp["resize_height"] == 0)
+    print("  c25 cross-check %s: mode=%s hf size=%s crop=%s do_center_crop=%s out=%dx%d -> %s" % (
+        case_id, mode, size, getattr(proc, "crop_size", None), getattr(proc, "do_center_crop", None), oh, ow,
+        "ok" if ok else "MISMATCH"))
+    if not ok:
+        raise SystemExit("FAIL: %s derived preprocess %s disagrees with transformers (size %s, output %dx%d)" % (
+            case_id, {k: pp[k] for k in ("resize_mode", "resize_width", "resize_height", "resize_shortest_edge",
+                                        "image_width", "image_height")}, size, oh, ow))
+
+
 def reference_cases(models_root):
     recs = []
     ref_root = os.path.join(models_root, "reference")
@@ -914,6 +1101,9 @@ def main():
             records.append(case_record(c["id"], rel, False, c["task_override"], c["expect"], c["errors"],
                                        c["warnings"], derive_full(folder, c["task_override"])))
     check_worst_cases(b, records)
+    for r in records:
+        if r["id"] in C25_CASES:
+            crosscheck_c25(r["id"], os.path.join(b.root, r["id"]), r["preprocess"])
     models_root = os.path.join(dev, "models")
     records += reference_cases(models_root)
     check_reference_worst_cases(models_root, records)

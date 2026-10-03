@@ -88,7 +88,7 @@ namespace PipelineModelImporterSpecPrivate
 
 	static const TCHAR* ResizeName(EPipelineImageResize R)
 	{
-		return R == EPipelineImageResize::Stretch ? TEXT("Stretch") : TEXT("ShortestEdgeCenterCrop");
+		return R == EPipelineImageResize::Stretch ? TEXT("Stretch") : R == EPipelineImageResize::StretchCenterCrop ? TEXT("StretchCenterCrop") : TEXT("ShortestEdgeCenterCrop");
 	}
 
 	static const TCHAR* ActivationName(EPipelineScoreActivation A)

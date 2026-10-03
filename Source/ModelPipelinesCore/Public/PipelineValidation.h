@@ -40,7 +40,7 @@ enum class EPipelineValidationCode : uint8
 	InvalidImageSize = 8,
 	/** Error: image task and RescaleFactor or any ImageStd component is <= 0, NaN or Inf. */
 	InvalidNormalization = 9,
-	/** Error: image task, ShortestEdgeCenterCrop and ResizeShortestEdge < max(ImageWidth, ImageHeight). */
+	/** Error: image task, and either ShortestEdgeCenterCrop with ResizeShortestEdge < max(ImageWidth, ImageHeight), or StretchCenterCrop with ResizeWidth/ResizeHeight outside 1..8192 or smaller than ImageWidth/ImageHeight. */
 	InvalidResize = 10,
 	/** Warning: License.SpdxId empty (after trimming). */
 	LicenseSpdxMissing = 11,

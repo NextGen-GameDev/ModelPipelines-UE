@@ -233,9 +233,9 @@ void FPipelineResizeModeSpec::Define()
 		});
 
 		// Non-square crop: Image takes the crop (W40,H48); resize is 64x64. Catches swapped width/height.
-		It("ViTImageProcessor int 64 + crop {height 48,width 40} is StretchCenterCrop resize 64x64 image 40x48", [this]()
+		It("DeiTImageProcessor int 64 + crop {height 48,width 40} is StretchCenterCrop resize 64x64 image 40x48", [this]()
 		{
-			CheckSynth({TEXT("vit_hw"), TEXT(R"({"image_processor_type":"ViTImageProcessor","size":64,"do_center_crop":true,"crop_size":{"height":48,"width":40}})"),
+			CheckSynth({TEXT("vit_hw"), TEXT(R"({"image_processor_type":"DeiTImageProcessor","size":64,"do_center_crop":true,"crop_size":{"height":48,"width":40}})"),
 				true, EPipelineImageResize::StretchCenterCrop, 40, 48, 64, 64, 0, 0});
 		});
 

@@ -11,6 +11,8 @@ namespace PipelineModelPackagePrivate
 	static constexpr int32 MaxMaxTokens = 65536;
 	static constexpr int32 MinImageSize = 1;
 	static constexpr int32 MaxImageSize = 8192;
+	static constexpr int32 MinMaxDetections = 1;
+	static constexpr int32 MaxMaxDetections = 10000;
 
 	static const EPipelineTask AllTasks[] = {
 		EPipelineTask::None,
@@ -29,6 +31,20 @@ namespace PipelineModelPackagePrivate
 	static bool IsPositive(double Value)
 	{
 		return Value > 0.0 && FMath::IsFinite(Value);
+	}
+}
+
+const TCHAR* LexToString(EPipelineImageResample Value)
+{
+	switch (Value)
+	{
+	case EPipelineImageResample::Nearest: return TEXT("Nearest");
+	case EPipelineImageResample::Lanczos: return TEXT("Lanczos");
+	case EPipelineImageResample::Bilinear: return TEXT("Bilinear");
+	case EPipelineImageResample::Bicubic: return TEXT("Bicubic");
+	case EPipelineImageResample::Box: return TEXT("Box");
+	case EPipelineImageResample::Hamming: return TEXT("Hamming");
+	default: return TEXT("Unknown");
 	}
 }
 
@@ -196,6 +212,23 @@ bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutRepor
 					FString::Printf(TEXT("ResizeWidth x ResizeHeight is %dx%d; with StretchCenterCrop it must be at least ImageWidth x ImageHeight = %dx%d and at most %d"),
 						RW, RH, Width, Height, MaxImageSize));
 			}
+		}
+	}
+
+	if (Task == EPipelineTask::ObjectDetection)
+	{
+		// > 1 is valid (disables NMS); only NaN and negative values are rejected (NaN fails the >= comparison).
+		const float Thr = Postprocess.NmsIouThreshold;
+		if (!(Thr >= 0.f))
+		{
+			AddError(EPipelineValidationCode::InvalidPostprocess,
+				FString::Printf(TEXT("NmsIouThreshold is %g; it must be >= 0 (values >= 1 disable NMS)"), (double)Thr));
+		}
+		const int32 MaxDet = Postprocess.MaxDetections;
+		if (MaxDet < MinMaxDetections || MaxDet > MaxMaxDetections)
+		{
+			AddError(EPipelineValidationCode::InvalidPostprocess,
+				FString::Printf(TEXT("MaxDetections is %d; it must be %d..%d"), MaxDet, MinMaxDetections, MaxMaxDetections));
 		}
 	}
 

@@ -322,14 +322,14 @@ void FPipelineModelPackageSpec::Define()
 				TestEqual(FString::Printf(TEXT("round trip of value %d"), (int32)Enum->GetValueByIndex(i)), FString(LexToString(C)), Name);
 				++Checked;
 			}
-			TestEqual(TEXT("number of enumerators checked expected 46"), Checked, 46);
+			TestEqual(TEXT("number of enumerators checked expected 47 (46 + InvalidPostprocess, C26)"), Checked, 47);
 		});
 
 		It("LexToString of an out-of-range code returns Unknown without asserting", [this]()
 		{
 			TestEqual(TEXT("255 expected Unknown"), FString(LexToString((EPipelineValidationCode)255)), FString(TEXT("Unknown")));
-			// 14 sits in a gap of the contract numbering (13 -> 20).
-			TestEqual(TEXT("14 (gap) expected Unknown"), FString(LexToString((EPipelineValidationCode)14)), FString(TEXT("Unknown")));
+			// 15 sits in a gap of the contract numbering (14 -> 20; 14 = InvalidPostprocess since M4, C26).
+			TestEqual(TEXT("15 (gap) expected Unknown"), FString(LexToString((EPipelineValidationCode)15)), FString(TEXT("Unknown")));
 			TestEqual(TEXT("68 expected Unknown"), FString(LexToString((EPipelineValidationCode)68)), FString(TEXT("Unknown")));
 		});
 

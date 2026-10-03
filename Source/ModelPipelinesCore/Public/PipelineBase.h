@@ -6,6 +6,7 @@
 #include "Templates/Function.h"
 #include "Templates/SharedPointer.h"
 #include "HAL/ThreadSafeCounter.h"
+#include "Tasks/Task.h"
 #include "UObject/Object.h"
 #include "UObject/ObjectMacros.h"
 #include "UObject/ObjectPtr.h"
@@ -38,6 +39,9 @@ struct MODELPIPELINESCORE_API FPipelineStages
 	TUniqueFunction<FPipelineResult(const FPipelineModelInfo& Info, TArray<FPipelineTensor>&& Outputs)> Postprocess;
 	/** Game thread, exactly once per RunStages call, never inside RunStages. Result carries Device and all timings. */
 	TUniqueFunction<void(const FPipelineResult& Result)> Complete;
+	/** Optional. Preprocess is launched only after this task completes (Vision: the GPU readback). Default: invalid
+	    handle = no prerequisite. No worker blocks while waiting. */
+	UE::Tasks::FTask Prerequisite;
 };
 
 /**

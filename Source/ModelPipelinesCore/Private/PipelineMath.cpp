@@ -234,4 +234,87 @@ namespace UE::ModelPipelines
 		}
 		return true;
 	}
+
+	double BoxIoU(const FPipelineNmsBox& A, const FPipelineNmsBox& B)
+	{
+		// Every max(0, x) below is written as (x > 0 ? x : 0) so a NaN collapses to 0 or propagates into a NaN union,
+		// which the final check maps to 0.
+		auto Positive = [](double X) { return X > 0.0 ? X : 0.0; };
+		const double AreaA = Positive((double)A.X1 - (double)A.X0) * Positive((double)A.Y1 - (double)A.Y0);
+		const double AreaB = Positive((double)B.X1 - (double)B.X0) * Positive((double)B.Y1 - (double)B.Y0);
+		const double InterW = Positive(FMath::Min((double)A.X1, (double)B.X1) - FMath::Max((double)A.X0, (double)B.X0));
+		const double InterH = Positive(FMath::Min((double)A.Y1, (double)B.Y1) - FMath::Max((double)A.Y0, (double)B.Y0));
+		const double Inter = InterW * InterH;
+		const double Union = AreaA + AreaB - Inter;
+		if (!(Union > 0.0) || FMath::IsNaN(Inter))
+		{
+			return 0.0;
+		}
+		const double IoU = Inter / Union;
+		return FMath::IsFinite(IoU) ? IoU : 0.0;
+	}
+
+	TArray<int32> NonMaxSuppression(TConstArrayView<FPipelineNmsBox> Boxes, float IouThreshold, int32 MaxKeep)
+	{
+		TArray<int32> Kept;
+		if (MaxKeep <= 0 || Boxes.Num() == 0)
+		{
+			return Kept;
+		}
+
+		TArray<int32> Order;
+		Order.SetNumUninitialized(Boxes.Num());
+		for (int32 i = 0; i < Boxes.Num(); ++i)
+		{
+			Order[i] = i;
+		}
+		// Strict total order: non-NaN before NaN, higher score first, then lower index.
+		Order.Sort([Boxes](const int32 IA, const int32 IB)
+		{
+			const float SA = Boxes[IA].Score;
+			const float SB = Boxes[IB].Score;
+			const bool bNaNA = FMath::IsNaN(SA);
+			const bool bNaNB = FMath::IsNaN(SB);
+			if (bNaNA != bNaNB)
+			{
+				return !bNaNA;
+			}
+			if (!bNaNA && SA != SB)
+			{
+				return SA > SB;
+			}
+			return IA < IB;
+		});
+
+		// NaN or >= 1: nothing is suppressed (IoU never exceeds 1).
+		const bool bSuppress = IouThreshold < 1.f;
+		const double Threshold = (double)IouThreshold;
+		Kept.Reserve(FMath::Min(MaxKeep, Boxes.Num()));
+		for (const int32 Candidate : Order)
+		{
+			if (Kept.Num() >= MaxKeep)
+			{
+				break;
+			}
+			bool bDrop = false;
+			if (bSuppress)
+			{
+				const FPipelineNmsBox& C = Boxes[Candidate];
+				for (const int32 K : Kept)
+				{
+					const FPipelineNmsBox& KB = Boxes[K];
+					if (KB.ClassIndex == C.ClassIndex && BoxIoU(KB, C) > Threshold)
+					{
+						bDrop = true;
+						break;
+					}
+				}
+			}
+			if (!bDrop)
+			{
+				Kept.Add(Candidate);
+			}
+		}
+		return Kept;
+	}
 }

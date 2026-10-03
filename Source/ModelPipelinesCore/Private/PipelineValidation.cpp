@@ -22,6 +22,7 @@ const TCHAR* LexToString(EPipelineValidationCode Code)
 	case EPipelineValidationCode::LicenseSpdxMissing: return TEXT("LicenseSpdxMissing");
 	case EPipelineValidationCode::LicenseSourceMissing: return TEXT("LicenseSourceMissing");
 	case EPipelineValidationCode::LicenseAttributionMissing: return TEXT("LicenseAttributionMissing");
+	case EPipelineValidationCode::InvalidPostprocess: return TEXT("InvalidPostprocess");
 	case EPipelineValidationCode::MissingInput: return TEXT("MissingInput");
 	case EPipelineValidationCode::UnexpectedInput: return TEXT("UnexpectedInput");
 	case EPipelineValidationCode::InputTypeMismatch: return TEXT("InputTypeMismatch");

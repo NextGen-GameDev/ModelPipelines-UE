@@ -74,3 +74,26 @@ struct MODELPIPELINESCORE_API FPipelineSimilarityMatch
 	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
 	float Score = 0.f;
 };
+
+/** One object detection (docs/contracts.md C26). */
+USTRUCT(BlueprintType)
+struct MODELPIPELINESCORE_API FPipelineDetection
+{
+	GENERATED_BODY()
+
+	/** Labels[Index] of the package. */
+	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
+	FString Label;
+
+	/** Class id (index into the package's Labels). */
+	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
+	int32 Index = -1;
+
+	/** Class score after activation. */
+	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
+	float Score = 0.f;
+
+	/** Normalized to the input image: Min = (left, top), Max = (right, bottom), each in [0, 1]; bIsValid true when set. */
+	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
+	FBox2D Box = FBox2D(ForceInit);
+};

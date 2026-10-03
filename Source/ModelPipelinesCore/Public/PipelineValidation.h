@@ -48,6 +48,8 @@ enum class EPipelineValidationCode : uint8
 	LicenseSourceMissing = 12,
 	/** Warning: License.Attribution empty (after trimming). */
 	LicenseAttributionMissing = 13,
+	/** Error: ObjectDetection and NmsIouThreshold NaN or < 0, or MaxDetections outside 1..10000. */
+	InvalidPostprocess = 14,
 	// task I/O (ResolvePipelineTaskIO, WP2.3)
 	/** Error: an expected model input is absent. */
 	MissingInput = 20,

@@ -51,6 +51,21 @@ enum class EPipelineScoreActivation : uint8
 	Sigmoid = 1
 };
 
+/** Image resample filter. Values equal PIL's Image.Resampling (docs/contracts.md C26). */
+UENUM(BlueprintType)
+enum class EPipelineImageResample : uint8
+{
+	Nearest = 0,
+	Lanczos = 1,
+	Bilinear = 2,
+	Bicubic = 3,
+	Box = 4,
+	Hamming = 5
+};
+
+/** Enumerator name of a resample filter ("Bicubic"); "Unknown" for a value outside the enum. */
+MODELPIPELINESCORE_API const TCHAR* LexToString(EPipelineImageResample Value);
+
 /** Enumerator name of a task: "None", "TextEmbedding", ...; "Unknown" for a value outside the enum. */
 MODELPIPELINESCORE_API const TCHAR* LexToString(EPipelineTask Task);
 
@@ -112,6 +127,10 @@ struct MODELPIPELINESCORE_API FPipelinePreprocessSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Image")
 	int32 ResizeHeight = 0;
 
+	/** Image tasks: resample filter used when resizing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Image")
+	EPipelineImageResample Resample = EPipelineImageResample::Bilinear;
+
 	/** Image tasks: factor applied to 0..255 pixel values. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Image")
 	float RescaleFactor = 1.f / 255.f;
@@ -134,6 +153,15 @@ struct MODELPIPELINESCORE_API FPipelinePostprocessSettings
 	/** Classification and detection scores. Detection with Softmax: the last logit column is the no-object class. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scores")
 	EPipelineScoreActivation ScoreActivation = EPipelineScoreActivation::Softmax;
+
+	/** ObjectDetection: class-wise non-maximum suppression; a box is dropped when a kept box of the same class overlaps it
+	    with IoU > NmsIouThreshold. >= 1 disables NMS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection", meta = (ClampMin = 0, ClampMax = 1))
+	float NmsIouThreshold = 0.7f;
+
+	/** ObjectDetection: maximum number of detections returned (1..10000). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection", meta = (ClampMin = 1, ClampMax = 10000))
+	int32 MaxDetections = 100;
 };
 
 /** License record of the packaged model. */
@@ -195,7 +223,7 @@ public:
 	EPipelineDevice PreferredDevice = EPipelineDevice::Auto;
 
 	/**
-	 * Settings only: loads neither model nor tokenizer. Appends messages (codes 2..13) to OutReport.
+	 * Settings only: loads neither model nor tokenizer. Appends messages (codes 2..14) to OutReport.
 	 * Returns true when this call added no Error. Does not modify the package.
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintPure = false, Category = "Pipelines")

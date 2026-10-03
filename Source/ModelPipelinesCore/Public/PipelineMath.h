@@ -43,4 +43,26 @@ namespace UE::ModelPipelines
 
 	/** true if every value is finite (empty -> true). */
 	MODELPIPELINESCORE_API bool AllFinite(TConstArrayView<float> Values);
+
+	/** One NMS candidate: corners (X0, Y0) top-left, (X1, Y1) bottom-right, its score and class. */
+	struct FPipelineNmsBox
+	{
+		float X0 = 0;
+		float Y0 = 0;
+		float X1 = 0;
+		float Y1 = 0;
+		float Score = 0;
+		int32 ClassIndex = 0;
+	};
+
+	/** Intersection over union in double. Width/height of each box = max(0, X1 - X0), max(0, Y1 - Y0);
+	    inter = max(0, min(AX1,BX1) - max(AX0,BX0)) * max(0, min(AY1,BY1) - max(AY0,BY0)); union = areaA + areaB - inter;
+	    union <= 0 (or NaN) -> 0. */
+	MODELPIPELINESCORE_API double BoxIoU(const FPipelineNmsBox& A, const FPipelineNmsBox& B);
+
+	/** Greedy class-wise NMS. Visit boxes by Score descending (ties: lower input index first; NaN scores last, among
+	    themselves by index). A box is kept unless an already kept box with the same ClassIndex has IoU > IouThreshold
+	    (strictly greater). IouThreshold >= 1 -> nothing suppressed; NaN -> treated as 1. Returns kept input indices in
+	    visit order, at most MaxKeep (MaxKeep <= 0 -> empty). Empty input -> empty. */
+	MODELPIPELINESCORE_API TArray<int32> NonMaxSuppression(TConstArrayView<FPipelineNmsBox> Boxes, float IouThreshold, int32 MaxKeep);
 }

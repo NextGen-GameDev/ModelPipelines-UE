@@ -513,6 +513,11 @@ void UPipelineBase::RunStages(FPipelineStages&& Stages)
 
 	State->Runtime = Runtime;
 
+	// Optional caller prerequisite (e.g. a GPU readback). An invalid handle is skipped by the task system
+	// (Core/Public/Tasks/TaskPrivate.h, null prerequisites count as completed). The state no longer needs the handle.
+	UE::Tasks::FTask CallerPrerequisite = MoveTemp(State->Stages.Prerequisite);
+	State->Stages.Prerequisite = UE::Tasks::FTask();
+
 	// The first call launches the resolve task (Model->Initialize + ResolvePipelineTaskIO); every call's preprocess
 	// task waits for it as a prerequisite, so queued calls don't occupy a worker while the model initializes.
 	bool bLaunchedResolve = false;
@@ -520,7 +525,7 @@ void UPipelineBase::RunStages(FPipelineStages&& Stages)
 	UE::Tasks::Launch(TEXT("ModelPipelines.Preprocess"), [State, bLaunchedResolve]()
 	{
 		RunPreprocessAndEnqueue(State, bLaunchedResolve);
-	}, UE::Tasks::Prerequisites(ResolveTask), UE::Tasks::ETaskPriority::BackgroundNormal);
+	}, UE::Tasks::Prerequisites(ResolveTask, CallerPrerequisite), UE::Tasks::ETaskPriority::BackgroundNormal);
 }
 
 FPipelineResult UPipelineBase::RunStagesBlocking(FPipelineStages&& Stages)
@@ -538,6 +543,12 @@ FPipelineResult UPipelineBase::RunStagesBlocking(FPipelineStages&& Stages)
 	double InferenceMs = 0.0;
 	double PostprocessMs = 0.0;
 	EPipelineDevice Device = EPipelineDevice::Auto;
+
+	// Caller prerequisite first (tests and tools only, so waiting is allowed here).
+	if (Stages.Prerequisite.IsValid())
+	{
+		Stages.Prerequisite.Wait();
+	}
 
 	// Tests and tools only: waiting here is allowed (it may run the resolve inline if no worker picked it up yet).
 	bool bLaunchedResolve = false;

@@ -3,6 +3,9 @@
 #include "ModelPipelinesVisionModule.h"
 
 #include "Modules/ModuleManager.h"
+#include "PipelineVisionLog.h"
+
+DEFINE_LOG_CATEGORY(LogModelPipelinesVision);
 
 void FModelPipelinesVisionModule::StartupModule()
 {

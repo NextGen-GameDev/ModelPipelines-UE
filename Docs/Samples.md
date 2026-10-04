@@ -14,7 +14,7 @@ The maps are in the plugin's content, in the folder `/ModelPipelines/Samples/Map
 ## Before you start
 
 1. [Install the plugin](Install.md), including **Show Plugin Content**.
-2. [Get and import the models](ImportModel.md) so the four packages exist in `/Game/Models`.
+2. [Get and import the models](ImportModel.md) so the four packages exist in `/Game/Models`, or run the batch import script from [Import a model](ImportModel.md#import-from-blueprint-or-python-batch-import).
 
 ## Open and play a map
 

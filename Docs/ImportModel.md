@@ -70,6 +70,91 @@ Repeat steps 3 to 8 for all four folders. Keep the folder names the script made.
 - `/Game/Models/resnet-50`
 - `/Game/Models/rtdetr_r18vd`
 
+## Import from Blueprint or Python (batch import)
+
+The menu import handles one folder at a time. To import many folders, or to import without clicking, call the function **Import Model Folder** (category **Model Pipelines|Editor**). It does the same work as the menu command. It runs in the editor, on the game thread, and blocks until it is done.
+
+In a Blueprint (an Editor Utility Blueprint or Editor Utility Widget), add the node **Import Model Folder**. It takes one **Options** struct (**Pipeline Import Options**) and returns a **Pipeline Import Result**.
+
+### Options
+
+| Field | Default | What it does |
+|---|---|---|
+| **Source Folder** | empty | The model folder on disk. It holds `model.onnx` (or `onnx/model.onnx`), `config.json` and so on. |
+| **Destination Path** | `/Game/Models` | The Content path where the two assets are created. |
+| **Asset Name** | empty | Name of the package asset. Empty means the folder name (cleaned up). The model data asset is `<Asset Name>_Model`. |
+| **Task** | None | Forces a task. None means detect it from the folder. |
+| **Preferred Device** | Auto | The device preference written to the package. Auto uses the folder's `modelpipelines.json` value, or Auto. |
+| **Overwrite Existing** | off | Updates assets that already exist (of the right classes) in place. Other objects are never deleted or replaced. |
+| **Save** | on | Saves both assets to disk after a successful import. |
+| **Validate** | on | Runs the full validator: model creation, task inputs and outputs, and test runs. The package settings are always checked. |
+| **Validation** | smoke test on, GPU check on | The validator options used when **Validate** is on: **Run Smoke Test** and **Check Gpu**. |
+
+### Result
+
+| Field | What it holds |
+|---|---|
+| **Success** | True when both assets exist, are valid and (with **Save**) were saved. |
+| **Package** | The model package asset. Null unless the assets exist. |
+| **Model** | The model data asset. Null unless the assets exist. |
+| **Report** | The validation messages (each has a severity, a code and a text) and the device checks. |
+
+A failed import leaves nothing in the project, except when saving fails: then the assets exist but are not saved, and **Success** is false.
+
+### Example: import all four sample models with Python
+
+This is an example, not part of the plugin. Change `MODELS_ROOT` to the folder you gave to `fetch_reference_models.py --out`. It imports the four folders into `/Game/Models`, saves them, and prints each result.
+
+```python
+import unreal
+
+# Example script. Set this to the --out folder of fetch_reference_models.py.
+MODELS_ROOT = "C:/PipelineModels"
+SLUGS = ["all-MiniLM-L6-v2", "distilbert-sst2", "resnet-50", "rtdetr_r18vd"]
+
+failed = 0
+for slug in SLUGS:
+    options = unreal.PipelineImportOptions()
+    options.source_folder = f"{MODELS_ROOT}/{slug}"
+    options.destination_path = "/Game/Models"
+    options.asset_name = slug
+    options.save = True
+    # Set options.overwrite_existing = True to import again over existing assets.
+
+    result = unreal.PipelineEditorLibrary.import_model_folder(options)
+
+    print(f"{slug}: success={result.success}")
+    if result.package:
+        print(f"  package: {result.package.get_path_name()}")
+    for message in result.report.messages:
+        print(f"  {message.severity} {message.code}: {message.message}")
+    if not result.success:
+        failed += 1
+
+print(f"Imported {len(SLUGS) - failed} of {len(SLUGS)} models.")
+```
+
+You should see one `success=True` line per model, then `Imported 4 of 4 models.` The four packages are now in `/Game/Models`, saved.
+
+You can run the script two ways. First, turn on the Python plugin: **Edit > Plugins**, search for **Python Editor Script Plugin**, enable it, and restart the editor.
+
+- **In the editor.** Open **Window > Developer Tools > Output Log**. Switch the console box at the bottom from **Cmd** to **Python**. Enter this, with your own script path. Use forward slashes:
+
+  ```
+  py "C:/Scripts/import_models.py"
+  ```
+
+  Or paste the script text into the Python console.
+- **Headless, from a terminal.** Save the script as a file, for example `C:\Scripts\import_models.py`. Put it in a path without spaces, or quote the path. Run:
+
+  ```
+  "<UE>\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "<Project>.uproject" -ExecutePythonScript="<script.py>" -unattended -nosplash -RenderOffscreen
+  ```
+
+  Replace `<UE>` with your engine folder, `<Project>` with the full path of your project, and `<script.py>` with your script path. The prints appear in the terminal and the log. Do not run this while the same project is open in the editor.
+
+In Python, names follow Unreal's rule: the class is `unreal.PipelineEditorLibrary`, the function is `import_model_folder`, and fields are written in snake_case. The `b` prefix of true-or-false fields is dropped, so **Save** is `save` and **Overwrite Existing** is `overwrite_existing`.
+
 ## What the importer needs in a folder
 
 - `model.onnx` (or `onnx/model.onnx`). It must be one single file. Models that use ONNX external data, and models over 2 GB, are not supported.

@@ -200,6 +200,14 @@ void AModelPipelinesSampleBase::SetStatusText(const FString& InText)
 	StatusText = InText;
 }
 
+void AModelPipelinesSampleBase::SetInputHint(const FString& InHint)
+{
+	if (State == EPipelineSampleState::Ready || State == EPipelineSampleState::Busy)
+	{
+		StatusText = InHint;
+	}
+}
+
 void AModelPipelinesSampleBase::SetState(EPipelineSampleState InState, const FString& InStatus)
 {
 	State = InState;
@@ -268,8 +276,13 @@ void AModelPipelinesSampleBase::ShowOverlay()
 		Mode.SetWidgetToFocus(Focus);
 		Mode.SetHideCursorDuringCapture(false);
 		PC->SetInputMode(Mode);
-		PC->SetShowMouseCursor(true);
 		bChangedInputMode = true;
+		bPrevShowMouseCursor = PC->ShouldShowMouseCursor();
+		if (!bPrevShowMouseCursor)
+		{
+			PC->SetShowMouseCursor(true);
+			bChangedMouseCursor = true;
+		}
 	}
 	if (Focus.IsValid())
 	{
@@ -288,14 +301,23 @@ void AModelPipelinesSampleBase::HideOverlay()
 	{
 		Viewport->RemoveViewportWidgetContent(OverlayWidget.ToSharedRef());
 	}
-	if (bChangedInputMode)
+	// Restore only what ShowOverlay changed. The engine has no getter for the previous input mode, so a changed mode goes
+	// back to game-only (the mode a level starts in); the cursor gets its previous value back.
+	if (bChangedInputMode || bChangedMouseCursor)
 	{
 		if (APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr)
 		{
-			PC->SetInputMode(FInputModeGameOnly());
-			PC->SetShowMouseCursor(false);
+			if (bChangedInputMode)
+			{
+				PC->SetInputMode(FInputModeGameOnly());
+			}
+			if (bChangedMouseCursor)
+			{
+				PC->SetShowMouseCursor(bPrevShowMouseCursor);
+			}
 		}
 		bChangedInputMode = false;
+		bChangedMouseCursor = false;
 	}
 	OverlayWidget.Reset();
 }

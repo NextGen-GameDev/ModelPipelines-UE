@@ -107,6 +107,10 @@ protected:
 	/** Replaces the status line (e.g. "Type a question"). */
 	void SetStatusText(const FString& InText);
 
+	/** Shows an input hint (e.g. "Type a question") only while Ready or Busy, so it never replaces the missing-package or
+	    creator-failure text a user needs to fix the sample. */
+	void SetInputHint(const FString& InHint);
+
 	/** Status shown while Ready. Default: "Ready". */
 	virtual FString GetReadyHint() const;
 
@@ -141,7 +145,10 @@ private:
 	FString StatusText;
 	FPipelineResult LastResult;
 	bool bPlaying = false;
+	/** What ShowOverlay changed on the player controller, so HideOverlay restores only that (and the cursor's old value). */
 	bool bChangedInputMode = false;
+	bool bChangedMouseCursor = false;
+	bool bPrevShowMouseCursor = false;
 
 	/** The one "latest wins" pending request. */
 	TFunction<void()> PendingCall;

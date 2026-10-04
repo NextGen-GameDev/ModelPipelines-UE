@@ -34,7 +34,8 @@ void AModelPipelinesSentimentSample::Analyze(const FString& Message)
 {
 	if (Message.TrimStartAndEnd().IsEmpty())
 	{
-		SetStatusText(TEXT("Type a message"));
+		// Only a hint while usable: never replace the missing-package / failure text.
+		SetInputHint(TEXT("Type a message"));
 		return;
 	}
 	// Runs now when idle, otherwise waits in the single pending slot (latest wins).

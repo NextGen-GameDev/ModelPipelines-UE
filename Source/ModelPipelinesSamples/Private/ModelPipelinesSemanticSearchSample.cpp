@@ -53,7 +53,8 @@ void AModelPipelinesSemanticSearchSample::Search(const FString& Query)
 	const FString Trimmed = Query.TrimStartAndEnd();
 	if (Trimmed.IsEmpty())
 	{
-		SetStatusText(TEXT("Type a question"));
+		// Only a hint while usable: never replace the missing-package / failure text.
+		SetInputHint(TEXT("Type a question"));
 		return;
 	}
 	// Runs now when idle, otherwise waits in the single pending slot (e.g. while the corpus is still being embedded).
@@ -85,7 +86,7 @@ void AModelPipelinesSemanticSearchSample::OnPipelineReady()
 	RunOrQueue([this]() { StartCorpusCall(); });
 }
 
-void AModelPipelinesSemanticSearchSample::StartCorpusCall()
+void AModelPipelinesSemanticSearchSample::StartCorpusCall(const FString& FollowUpQuery)
 {
 	CorpusLines = DialogueLines;
 	if (CorpusLines.IsEmpty())
@@ -95,7 +96,7 @@ void AModelPipelinesSemanticSearchSample::StartCorpusCall()
 	}
 
 	// The callback runs on the game thread; the weak pointer skips it if the actor is gone (rule 4).
-	Pipeline->EmbedAsync(CorpusLines, [WeakThis = TWeakObjectPtr<AModelPipelinesSemanticSearchSample>(this)](const FPipelineResult& Result, const TArray<FPipelineEmbedding>& Embeddings)
+	Pipeline->EmbedAsync(CorpusLines, [WeakThis = TWeakObjectPtr<AModelPipelinesSemanticSearchSample>(this), FollowUpQuery](const FPipelineResult& Result, const TArray<FPipelineEmbedding>& Embeddings)
 	{
 		AModelPipelinesSemanticSearchSample* Self = WeakThis.Get();
 		if (!Self || !Self->IsPlaying())
@@ -108,6 +109,12 @@ void AModelPipelinesSemanticSearchSample::StartCorpusCall()
 			Self->bCorpusReady = true;
 		}
 		Self->FinishCall(Result);
+		// A retried corpus call carries the query that triggered it: run it now, unless a newer request already started from
+		// the pending slot (latest wins) or the corpus failed again (the next Search retries once more).
+		if (!FollowUpQuery.IsEmpty() && Self->bCorpusReady && Self->IsPlaying() && Self->GetSampleState() == EPipelineSampleState::Ready)
+		{
+			Self->RunOrQueue([Self, FollowUpQuery]() { Self->StartQueryCall(FollowUpQuery); });
+		}
 	});
 }
 
@@ -115,8 +122,8 @@ void AModelPipelinesSemanticSearchSample::StartQueryCall(const FString& Query)
 {
 	if (!bCorpusReady)
 	{
-		// The corpus call failed (or the lines are empty): report it instead of searching an empty corpus.
-		FinishCallNextTick(FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("The dialogue lines are not embedded, so there is nothing to search")));
+		// The one-time corpus call failed (or the lines were empty): retry it now, then run this query (one OnSampleResult each).
+		StartCorpusCall(Query);
 		return;
 	}
 

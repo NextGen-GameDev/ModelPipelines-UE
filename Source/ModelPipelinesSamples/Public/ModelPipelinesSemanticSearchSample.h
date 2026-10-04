@@ -56,8 +56,8 @@ protected:
 	virtual void RefreshOverlay() override;
 
 private:
-	/** Embeds the whole corpus in one call. */
-	void StartCorpusCall();
+	/** Embeds the whole corpus in one call; on success, FollowUpQuery (if any) runs next through RunOrQueue. */
+	void StartCorpusCall(const FString& FollowUpQuery = FString());
 	/** Embeds one query and ranks the corpus. */
 	void StartQueryCall(const FString& Query);
 

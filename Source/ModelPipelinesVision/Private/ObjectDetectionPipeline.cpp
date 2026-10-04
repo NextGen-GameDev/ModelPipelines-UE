@@ -15,10 +15,10 @@ namespace UE::ModelPipelines::Vision::DetectionPrivate
 {
 	using namespace UE::ModelPipelines::Vision::Private;
 
-	/** Per-call data: the labels and postprocess settings copied when the call was issued, the threshold, the result. */
+	/** Per-call data: the shared labels and the postprocess settings copy taken when the call was issued, the threshold, the result. */
 	struct FObjectDetectionCall
 	{
-		TArray<FString> Labels;
+		FSharedLabels Labels;   // immutable, shared with the pipeline (no per-call copy)
 		FPipelinePostprocessSettings Postprocess;
 		float ScoreThreshold = 0.5f;
 		TArray<FPipelineDetection> Result;
@@ -85,7 +85,7 @@ namespace UE::ModelPipelines::Vision::DetectionPrivate
 		const TConstArrayView64<float> L64 = Logits.GetFloatData();
 		const TConstArrayView64<float> B64 = Boxes.GetFloatData();
 		return DecodeDetections(TConstArrayView<float>(L64.GetData(), (int32)(Q * C)), (int32)Q, (int32)C,
-			TConstArrayView<float>(B64.GetData(), (int32)(Q * 4)), Call.Labels, Params, OutResult);
+			TConstArrayView<float>(B64.GetData(), (int32)(Q * 4)), LabelsOrEmpty(Call.Labels), Params, OutResult);
 	}
 
 	/** Verbose diagnostics: the timings of a finished call. */
@@ -116,7 +116,7 @@ namespace UE::ModelPipelines::Vision::DetectionPrivate
 	}
 
 	static FObjectDetectionCallRef MakeCall(float ScoreThreshold, bool bCopySettings,
-		const TArray<FString>& Labels, const FPipelinePostprocessSettings& Postprocess)
+		const FSharedLabels& Labels, const FPipelinePostprocessSettings& Postprocess)
 	{
 		const FObjectDetectionCallRef Call = MakeShared<FObjectDetectionCall, ESPMode::ThreadSafe>();
 		Call->ScoreThreshold = ScoreThreshold;
@@ -134,6 +134,17 @@ UObjectDetectionPipeline::UObjectDetectionPipeline()
 	PipelineTask = EPipelineTask::ObjectDetection;
 }
 
+FPipelineResult UObjectDetectionPipeline::OnInitialize(UPipelineModelPackage* InPackage)
+{
+	FPipelineResult R = Super::OnInitialize(InPackage);
+	if (R.bSuccess)
+	{
+		// One copy per initialization; calls share it read-only instead of copying the label list per call.
+		SharedLabels = UE::ModelPipelines::Vision::Private::MakeSharedLabels(GetLabels());
+	}
+	return R;
+}
+
 void UObjectDetectionPipeline::DetectAsync(UTexture* Image, float ScoreThreshold, FPipelineDetectionCallback OnComplete)
 {
 	using namespace UE::ModelPipelines::Vision::Private;
@@ -147,11 +158,12 @@ void UObjectDetectionPipeline::DetectAsync(UTexture* Image, float ScoreThreshold
 	// Off the game thread: the texture is not touched and nothing is copied; RunStages fails the call (InvalidArgument).
 	const bool bGameThread = IsInGameThread();
 	const FVisionCallInputRef Input = MakeVisionCallInput(bGameThread ? GetPreprocessSettings() : FPipelinePreprocessSettings());
-	const FObjectDetectionCallRef Call = MakeCall(ScoreThreshold, bGameThread, GetLabels(), GetPostprocessSettings());
+	const FObjectDetectionCallRef Call = MakeCall(ScoreThreshold, bGameThread, SharedLabels, GetPostprocessSettings());
 
 	FPipelineStages Stages = MakeStages(Input, Call);
-	if (bGameThread && IsReady())
+	if (bGameThread && IsReady() && !FMath::IsNaN(ScoreThreshold))
 	{
+		// NaN threshold: no read; Preprocess fails the call with InvalidArgument before inference.
 		// The read always completes (success, failure, timeout or Cancelled); a failed read fails Preprocess.
 		Stages.Prerequisite = StartTextureRead(Image, Input);
 	}
@@ -176,7 +188,7 @@ void UObjectDetectionPipeline::DetectImageAsync(const FPipelineImage& Image, flo
 	}
 	const bool bGameThread = IsInGameThread();
 	const FVisionCallInputRef Input = MakeVisionCallInput(bGameThread ? GetPreprocessSettings() : FPipelinePreprocessSettings());
-	const FObjectDetectionCallRef Call = MakeCall(ScoreThreshold, bGameThread, GetLabels(), GetPostprocessSettings());
+	const FObjectDetectionCallRef Call = MakeCall(ScoreThreshold, bGameThread, SharedLabels, GetPostprocessSettings());
 	if (bGameThread)
 	{
 		Input->Image = Image;
@@ -208,7 +220,7 @@ FPipelineResult UObjectDetectionPipeline::DetectImageBlocking(const FPipelineIma
 	}
 	const FVisionCallInputRef Input = MakeVisionCallInput(GetPreprocessSettings());
 	Input->Image = Image;
-	const FObjectDetectionCallRef Call = MakeCall(ScoreThreshold, true, GetLabels(), GetPostprocessSettings());
+	const FObjectDetectionCallRef Call = MakeCall(ScoreThreshold, true, SharedLabels, GetPostprocessSettings());
 
 	// No prerequisite here (C26 note): blocking calls take only CPU images.
 	const FPipelineResult R = RunStagesBlocking(MakeStages(Input, Call));

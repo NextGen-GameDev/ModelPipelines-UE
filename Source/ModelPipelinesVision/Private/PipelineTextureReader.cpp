@@ -5,9 +5,12 @@
 //   game thread  ReadTexturePixelsAsync: validate, grab FTextureResource*, launch the delivery task (prerequisite: the
 //                read's ReadyEvent), enqueue the render command that starts the GPU copy, register the poll ticker.
 //   render       start: take Resource->TextureRHI, check the RHI desc, create FRHIGPUTextureReadback, EnqueueCopy (mip 0).
-//   game thread  core ticker, every tick: enqueue one render command that polls every pending read; finish reads whose
-//                copy completed / failed / timed out (stats, then trigger ReadyEvent).
-//   render       poll: IsReady -> Lock -> copy rows (pitch from Lock) -> Unlock -> delete readback.
+//   game thread  core ticker, every tick: enqueue one render command that polls every pending read; drop reads that
+//                finished (stats only); time out reads with no data after 5 s (the only game-thread ReadyEvent trigger
+//                besides CancelAll).
+//   render       poll: IsReady -> Lock -> copy rows (pitch from Lock) -> Unlock -> delete readback, then the render
+//                thread that wins the Phase CAS sets Final and triggers ReadyEvent (waking a worker costs the game
+//                thread nothing).
 //   background   delivery task: convert bytes -> FPipelineImage, call OnRead. The delivery task is the returned task, so
 //                it completes only after OnRead returned.
 
@@ -42,7 +45,7 @@ namespace UE::ModelPipelines::Vision::Private
 		Phase_Pending = 0,
 		/** Render thread copied the bytes. */
 		Phase_Copied = 1,
-		/** Render thread found an error (RtError / RtMessage). */
+		/** Render thread found an error (and set Final). */
 		Phase_RtFailed = 2,
 		/** Game thread finished it (timed out or cancelled); the render thread only releases its objects. */
 		Phase_GameFinished = 3,
@@ -71,12 +74,11 @@ namespace UE::ModelPipelines::Vision::Private
 		int32 Height = 0;
 		TArray64<uint8> Bytes;
 		double CopiedSeconds = 0.0;
-		EPipelineError RtError = EPipelineError::None;
-		FString RtMessage;
 
 		std::atomic<int32> Phase{ Phase_Pending };
 
-		// ---- written before ReadyEvent is triggered (or before the delivery task is launched), read by the delivery task ----
+		// ---- written only by the thread that moved Phase out of Pending (render thread: Copied / RtFailed; game thread:
+		//      timeout / cancel / immediate failure), before it triggers ReadyEvent; read by the delivery task only ----
 		FPipelineResult Final;
 	};
 	using FReadStatePtr = TSharedPtr<FReadState, ESPMode::ThreadSafe>;
@@ -294,10 +296,13 @@ namespace UE::ModelPipelines::Vision::Private
 	static void FailOnRenderThread(FReadState& State, EPipelineError Error, const FString& Message)
 	{
 		ReleaseRenderObjects(State);
-		State.RtError = Error;
-		State.RtMessage = Message;
 		int32 Expected = Phase_Pending;
-		State.Phase.compare_exchange_strong(Expected, Phase_RtFailed);
+		if (State.Phase.compare_exchange_strong(Expected, Phase_RtFailed))
+		{
+			// This thread owns the completion: nobody else writes Final or triggers ReadyEvent for this read.
+			State.Final = FPipelineResult::Fail(Error, Message);
+			State.ReadyEvent.Trigger();
+		}
 	}
 
 	static void StartCopyOnRenderThread(FRHICommandListImmediate& RHICmdList, FReadState& State)
@@ -388,9 +393,14 @@ namespace UE::ModelPipelines::Vision::Private
 			}
 			State.Readback->Unlock();
 			ReleaseRenderObjects(State);
-			State.CopiedSeconds = FPlatformTime::Seconds();
+			State.CopiedSeconds = FPlatformTime::Seconds();   // before the CAS: the game thread reads it once it sees Copied
 			int32 Expected = Phase_Pending;
-			State.Phase.compare_exchange_strong(Expected, Phase_Copied);
+			if (State.Phase.compare_exchange_strong(Expected, Phase_Copied))
+			{
+				// Won against the game-thread timeout / cancel: this thread owns Final and the trigger.
+				State.Final = FPipelineResult::Ok();
+				State.ReadyEvent.Trigger();
+			}
 		}
 	}
 
@@ -411,7 +421,10 @@ namespace UE::ModelPipelines::Vision::Private
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE_STR("ModelPipelines.Vision.ReadPoll");
 		const double T0 = FPlatformTime::Seconds();
+		// Reads that finished on the render thread (Copied / RtFailed) were already triggered there; the game thread only
+		// does stats for them and must not touch Final (the render thread writes it after its CAS).
 		TArray<FReadStatePtr> Finished;
+		TArray<FReadStatePtr> TimedOut;
 		TArray<FReadStatePtr> StillPending;
 		TArray<FReadStatePtr> ToRenderThread;
 		for (const FReadStatePtr& S : GPending)
@@ -424,6 +437,7 @@ namespace UE::ModelPipelines::Vision::Private
 				{
 					S->Final = FPipelineResult::Fail(EPipelineError::PreprocessFailed, TEXT("GPU readback timed out (no data after 5 s)"));
 					Finished.Add(S);
+					TimedOut.Add(S);
 					ToRenderThread.Add(S);   // the render thread releases the readback
 					continue;
 				}
@@ -431,12 +445,11 @@ namespace UE::ModelPipelines::Vision::Private
 			}
 			if (Phase == Phase_Copied)
 			{
-				S->Final = FPipelineResult::Ok();
+				RecordWaitMs((S->CopiedSeconds - S->StartSeconds) * 1000.0);
 				Finished.Add(S);
 			}
 			else if (Phase == Phase_RtFailed)
 			{
-				S->Final = FPipelineResult::Fail(S->RtError, S->RtMessage);
 				Finished.Add(S);
 			}
 			else
@@ -450,7 +463,13 @@ namespace UE::ModelPipelines::Vision::Private
 			EnqueuePoll(MoveTemp(ToRenderThread));
 		}
 		GPending = MoveTemp(StillPending);
+		// Rare path (timeout): the only ReadyEvent trigger left in the tick; timed before the share is computed.
+		for (const FReadStatePtr& S : TimedOut)
+		{
+			S->ReadyEvent.Trigger();
+		}
 
+		// Everything the tick did for these reads, including the triggers above, is split across them.
 		const int32 NumTouched = Finished.Num() + GPending.Num();
 		const double ShareMs = NumTouched > 0 ? (FPlatformTime::Seconds() - T0) * 1000.0 / NumTouched : 0.0;
 		for (const FReadStatePtr& S : GPending)
@@ -461,11 +480,6 @@ namespace UE::ModelPipelines::Vision::Private
 		{
 			S->GameThreadMs += ShareMs;
 			RecordGameThreadMs(S->GameThreadMs);
-			if (S->Final.bSuccess)
-			{
-				RecordWaitMs((S->CopiedSeconds - S->StartSeconds) * 1000.0);
-			}
-			S->ReadyEvent.Trigger();
 		}
 
 		if (GPending.Num() == 0)
@@ -503,10 +517,17 @@ namespace UE::ModelPipelines::Vision::Private
 		}
 		TArray<FReadStatePtr> Cancelled = MoveTemp(GPending);
 		GPending.Reset();
+		// Only reads still Pending are cancelled here; a read the render thread already finished (Copied / RtFailed) is
+		// owned by the render thread, which writes its Final and triggers its ReadyEvent.
+		TArray<FReadStatePtr> ToTrigger;
 		for (const FReadStatePtr& S : Cancelled)
 		{
-			S->Phase.store(Phase_GameFinished);
-			S->Final = FPipelineResult::Fail(EPipelineError::Cancelled, FString::Printf(TEXT("texture read cancelled: %s"), Why));
+			int32 Expected = Phase_Pending;
+			if (S->Phase.compare_exchange_strong(Expected, Phase_GameFinished))
+			{
+				S->Final = FPipelineResult::Fail(EPipelineError::Cancelled, FString::Printf(TEXT("texture read cancelled: %s"), Why));
+				ToTrigger.Add(S);
+			}
 		}
 		if (Cancelled.Num() > 0)
 		{
@@ -525,7 +546,7 @@ namespace UE::ModelPipelines::Vision::Private
 				}
 				UE_LOG(LogModelPipelinesVision, Warning, TEXT("%d texture reads were pending after the RHI shut down; their GPU objects are leaked."), Cancelled.Num());
 			}
-			for (const FReadStatePtr& S : Cancelled)
+			for (const FReadStatePtr& S : ToTrigger)
 			{
 				S->ReadyEvent.Trigger();
 			}

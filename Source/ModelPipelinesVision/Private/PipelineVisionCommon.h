@@ -37,6 +37,15 @@ namespace UE::ModelPipelines::Vision::Private
 	};
 	using FVisionCallInputRef = TSharedRef<FVisionCallInput, ESPMode::ThreadSafe>;
 
+	/** Immutable label list shared between a pipeline and its in-flight calls. Null reads as empty. */
+	using FSharedLabels = TSharedPtr<const TArray<FString>, ESPMode::ThreadSafe>;
+
+	/** Game thread (OnInitialize). One copy of Labels, shared from then on. */
+	FSharedLabels MakeSharedLabels(const TArray<FString>& Labels);
+
+	/** *Labels, or an empty array for null. Any thread. */
+	const TArray<FString>& LabelsOrEmpty(const FSharedLabels& Labels);
+
 	/** New call input with the settings copy. Any thread. */
 	FVisionCallInputRef MakeVisionCallInput(const FPipelinePreprocessSettings& Settings);
 

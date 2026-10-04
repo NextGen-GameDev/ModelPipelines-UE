@@ -41,4 +41,13 @@ public:
 	/** Tests and tools: blocking, any thread except the executor worker; the caller keeps the pipeline alive.
 	    OutDetections is emptied on failure. */
 	FPipelineResult DetectImageBlocking(const FPipelineImage& Image, float ScoreThreshold, TArray<FPipelineDetection>& OutDetections);
+
+protected:
+	/** Game thread. Builds SharedLabels from the labels copy taken at initialization. */
+	virtual FPipelineResult OnInitialize(UPipelineModelPackage* InPackage) override;
+
+private:
+	/** Immutable labels shared by reference with in-flight calls (no per-call copy). Written only on the game thread by
+	    OnInitialize; calls capture a reference and read it on background threads. */
+	TSharedPtr<const TArray<FString>, ESPMode::ThreadSafe> SharedLabels;
 };

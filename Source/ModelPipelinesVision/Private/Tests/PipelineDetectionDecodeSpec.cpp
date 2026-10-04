@@ -867,7 +867,10 @@ void FPipelineDetectionDecodeVisibleSpec::Define()
 		It("Eight threads decoding the same input get identical results", [this]()
 		{
 			// Pure function, any thread: shared static state (a scratch buffer) would break this.
-			FInput In;
+			// Shared with the threads by value: a timed-out wait returns while threads may still read them.
+			struct FShared { FInput In; TArray<FPipelineDetection> Reference; };
+			const TSharedRef<FShared, ESPMode::ThreadSafe> Shared = MakeShared<FShared, ESPMode::ThreadSafe>();
+			FInput& In = Shared->In;
 			In.Q = 40; In.C = 6;
 			FRandomStream Rng(77);
 			for (int32 i = 0; i < In.Q * In.C; ++i) { In.Logits.Add(Rng.FRandRange(-4.f, 3.f)); }
@@ -878,14 +881,16 @@ void FPipelineDetectionDecodeVisibleSpec::Define()
 			}
 			for (int32 c = 0; c < In.C; ++c) { In.Labels.Add(FString::Printf(TEXT("c%d"), c)); }
 			In.Params = MakeParams(EPipelineScoreActivation::Sigmoid, 0.2f, 0.5f, 50);
-			TArray<FPipelineDetection> Reference;
+			TArray<FPipelineDetection>& Reference = Shared->Reference;
 			if (!TestTrue(TEXT("reference decode succeeds"), Decode(In, Reference).bSuccess)) { return; }
 
 			TArray<TFuture<bool>> Futures;
 			for (int32 t = 0; t < 8; ++t)
 			{
-				Futures.Add(Async(EAsyncExecution::Thread, [&In, &Reference]()
+				Futures.Add(Async(EAsyncExecution::Thread, [Shared]()
 				{
+					const FInput& In = Shared->In;
+					const TArray<FPipelineDetection>& Reference = Shared->Reference;
 					for (int32 Iter = 0; Iter < 50; ++Iter)
 					{
 						TArray<FPipelineDetection> Mine;

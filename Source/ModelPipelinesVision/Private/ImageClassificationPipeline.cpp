@@ -15,10 +15,10 @@ namespace UE::ModelPipelines::Vision::ClassificationPrivate
 {
 	using namespace UE::ModelPipelines::Vision::Private;
 
-	/** Per-call data: the labels and activation copied when the call was issued, and the result of Postprocess. */
+	/** Per-call data: the shared labels and the activation copy taken when the call was issued, and the result of Postprocess. */
 	struct FImageClassificationCall
 	{
-		TArray<FString> Labels;
+		FSharedLabels Labels;   // immutable, shared with the pipeline (no per-call copy)
 		EPipelineScoreActivation Activation = EPipelineScoreActivation::Softmax;
 		int32 TopK = 1;
 		FPipelineClassification Result;
@@ -28,7 +28,8 @@ namespace UE::ModelPipelines::Vision::ClassificationPrivate
 	/** Main output float32 [1, C] (C == Labels.Num()) -> activated scores and top-k (C20 rules). */
 	static FPipelineResult ClassifyOutput(const FImageClassificationCall& Call, const FPipelineTensor& Out, FPipelineClassification& OutResult)
 	{
-		const int32 NumClasses = Call.Labels.Num();
+		const TArray<FString>& Labels = LabelsOrEmpty(Call.Labels);
+		const int32 NumClasses = Labels.Num();
 		const TConstArrayView<int64> Shape = Out.GetShape();
 		const bool bShapeOk = NumClasses >= 1 && Out.IsValid() && Out.GetType() == EPipelineTensorType::Float32 && Shape.Num() == 2
 			&& Shape[0] == 1 && Shape[1] == NumClasses && Out.Num() == (int64)NumClasses;
@@ -61,7 +62,7 @@ namespace UE::ModelPipelines::Vision::ClassificationPrivate
 				return FPipelineResult::Fail(EPipelineError::Internal, FString::Printf(TEXT("top-k index %d out of range"), Index));
 			}
 			FPipelineLabelScore& E = R.TopK.AddDefaulted_GetRef();
-			E.Label = Call.Labels[Index];
+			E.Label = Labels[Index];
 			E.Index = Index;
 			E.Score = R.Scores[Index];
 		}
@@ -105,6 +106,17 @@ UImageClassificationPipeline::UImageClassificationPipeline()
 	PipelineTask = EPipelineTask::ImageClassification;
 }
 
+FPipelineResult UImageClassificationPipeline::OnInitialize(UPipelineModelPackage* InPackage)
+{
+	FPipelineResult R = Super::OnInitialize(InPackage);
+	if (R.bSuccess)
+	{
+		// One copy per initialization; calls share it read-only instead of copying the label list per call.
+		SharedLabels = UE::ModelPipelines::Vision::Private::MakeSharedLabels(GetLabels());
+	}
+	return R;
+}
+
 void UImageClassificationPipeline::ClassifyAsync(UTexture* Image, int32 TopK, FPipelineImageClassificationCallback OnComplete)
 {
 	using namespace UE::ModelPipelines::Vision::Private;
@@ -122,7 +134,7 @@ void UImageClassificationPipeline::ClassifyAsync(UTexture* Image, int32 TopK, FP
 	Call->TopK = TopK;
 	if (bGameThread)
 	{
-		Call->Labels = GetLabels();
+		Call->Labels = SharedLabels;
 		Call->Activation = GetPostprocessSettings().ScoreActivation;
 	}
 
@@ -158,7 +170,7 @@ void UImageClassificationPipeline::ClassifyImageAsync(const FPipelineImage& Imag
 	if (bGameThread)
 	{
 		Input->Image = Image;
-		Call->Labels = GetLabels();
+		Call->Labels = SharedLabels;
 		Call->Activation = GetPostprocessSettings().ScoreActivation;
 	}
 
@@ -186,7 +198,7 @@ FPipelineResult UImageClassificationPipeline::ClassifyImageBlocking(const FPipel
 	Input->Image = Image;
 	const FImageClassificationCallRef Call = MakeShared<FImageClassificationCall, ESPMode::ThreadSafe>();
 	Call->TopK = TopK;
-	Call->Labels = GetLabels();
+	Call->Labels = SharedLabels;
 	Call->Activation = GetPostprocessSettings().ScoreActivation;
 
 	// No prerequisite here (C26 note): blocking calls take only CPU images.

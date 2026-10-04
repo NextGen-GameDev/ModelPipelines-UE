@@ -7,6 +7,17 @@
 
 namespace UE::ModelPipelines::Vision::Private
 {
+	FSharedLabels MakeSharedLabels(const TArray<FString>& Labels)
+	{
+		return MakeShared<TArray<FString>, ESPMode::ThreadSafe>(Labels);
+	}
+
+	const TArray<FString>& LabelsOrEmpty(const FSharedLabels& Labels)
+	{
+		static const TArray<FString> Empty;
+		return Labels.IsValid() ? *Labels : Empty;
+	}
+
 	FVisionCallInputRef MakeVisionCallInput(const FPipelinePreprocessSettings& Settings)
 	{
 		FVisionCallInputRef Input = MakeShared<FVisionCallInput, ESPMode::ThreadSafe>();

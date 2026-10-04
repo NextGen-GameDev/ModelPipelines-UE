@@ -24,6 +24,10 @@ You see **Model folder import failed** and a report. Nothing is created. Common 
 | Asset already exists | A package with that name is already in the folder. Delete it first, or import into another folder. |
 | Tokenizer invalid / smoke run failed | The model or tokenizer is broken or not what `config.json` says. Re-export the model. |
 
+## A warning about `hf_xet` while downloading models
+
+The download script may print a warning about `hf_xet`. It is harmless. The download still works.
+
 ## Detection boxes drift after resizing the window
 
 In `L_Detection` the boxes line up with the view because the capture copies your camera's projection when Play starts. If you resize the window during Play, the boxes can drift until the next Play. Stop and press Play again.

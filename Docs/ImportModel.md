@@ -4,7 +4,9 @@ Model Pipelines does not ship model files. You download the four sample models w
 
 ## Step 1: Get the models
 
-You need Python 3.11. About 1 GB is downloaded, and the first run takes about 6 minutes.
+You need Python 3.11. Python 3.11 is tested. About 1 GB is downloaded, and the first run takes about 6 minutes.
+
+This virtual environment is only for the download script. The editor runs import scripts (see the batch import section below) with its own Python (UE 5.8 ships 3.11.8), so do not `pip install` anything into the engine.
 
 1. Open a terminal in your project folder (the one with the `.uproject` file).
 2. Create and activate a virtual environment:
@@ -153,6 +155,16 @@ You can run the script two ways. First, turn on the Python plugin: **Edit > Plug
 
   Replace `<UE>` with your engine folder, `<Project>` with the full path of your project, and `<script.py>` with your script path. The prints appear in the terminal and the log. Do not run this while the same project is open in the editor.
 
+  `-ExecutePythonScript` only works when the Python Editor Script Plugin is enabled in the project. If you enabled it in **Edit > Plugins**, the editor already added it to your `.uproject` file. If you never opened the project in the editor, add this entry by hand to the `"Plugins"` list in the `.uproject` file:
+
+  ```json
+  "Plugins": [
+    { "Name": "PythonScriptPlugin", "Enabled": true }
+  ]
+  ```
+
+  If the list already has other entries, add this one next to them.
+
 In Python, names follow Unreal's rule: the class is `unreal.PipelineEditorLibrary`, the function is `import_model_folder`, and fields are written in snake_case. The `b` prefix of true-or-false fields is dropped, so **Save** is `save` and **Overwrite Existing** is `overwrite_existing`.
 
 ## What the importer needs in a folder
@@ -203,7 +215,18 @@ Example in Python (Output Log, **Python** console). The Python names follow the 
 import unreal
 pkg = unreal.load_asset("/Game/Models/all-MiniLM-L6-v2")
 report = unreal.PipelineEditorLibrary.validate_model_package(pkg, unreal.PipelineValidateOptions())
-print(report)
+for message in report.messages:
+    print(f"{message.severity} {message.code}: {message.message}")
+if not report.messages:
+    print("No problems found")
 ```
+
+An empty messages list (no errors and no warnings) means the package passed. For a package that passed, the output is one line:
+
+```
+No problems found
+```
+
+Any other output is a list of messages. Fix every error and run the check again.
 
 Next: [Samples](Samples.md).

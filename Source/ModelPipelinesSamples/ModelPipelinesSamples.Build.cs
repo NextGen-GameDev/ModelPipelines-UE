@@ -13,10 +13,10 @@ public class ModelPipelinesSamples : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] { "ModelPipelinesText", "ModelPipelinesVision", "Slate", "SlateCore", "InputCore" });
 
 		// Automation tests only: read goldens (Json), build model packages (NNE), decode PNG test images (ImageWrapper),
-		// write test render targets (RenderCore, RHI). Not needed in Shipping.
+		// write test render targets (RenderCore, RHI), list the sample assets (AssetRegistry). Not needed in Shipping.
 		if (Target.Configuration != UnrealTargetConfiguration.Shipping)
 		{
-			PrivateDependencyModuleNames.AddRange(new string[] { "Json", "NNE", "ImageWrapper", "RenderCore", "RHI" });
+			PrivateDependencyModuleNames.AddRange(new string[] { "Json", "NNE", "ImageWrapper", "RenderCore", "RHI", "AssetRegistry" });
 		}
 	}
 }

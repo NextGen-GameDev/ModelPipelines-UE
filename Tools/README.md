@@ -27,7 +27,7 @@ Importer test data (WP2.1), output under `<dev>/`:
   models into `<dev>/models/reference/<slug>/` (the repo's own files unchanged + `modelpipelines.json` + `model.onnx`),
   runs a onnxruntime-vs-torch check (fails above 1e-3), and writes `<dev>/models/reference/manifest.json`.
   HF cache goes to `<dev>/cache/hf`. Skips models whose `model.onnx` sha256 matches the manifest.
-- `make_import_test_data.py [--variant visible|hidden] [--out-models DIR] [--out-goldens FILE]` writes the 22 tiny
+- `make_import_test_data.py [--variant visible|hidden] [--out-models DIR] [--out-goldens FILE]` writes the 27 tiny
   importer folders to `<out-models>/import_test/` and the expectations JSON
   (`<dev>/goldens/import/import_expectations.json`), adding the reference cases when those folders exist. Reference
   cases are cross-checked against transformers; a disagreement fails the script.
@@ -39,6 +39,14 @@ Importer test data (WP2.1), output under `<dev>/`:
   `AutoImageProcessor` (size, crop_size, do_center_crop, output shape for a 300x200 image). `preprocess` has
   `resize_width`/`resize_height` (0 unless StretchCenterCrop). A pytest re-scans transformers for the
   ShortestEdgeIntClasses list (union of a source scan and an empirical size=40 scan) (`SHORTEST_EDGE_INT_CLASSES`).
+  WP4.4a (contract C32) adds `resample` (enumerator name), `nms_iou_threshold` 0.7 and `max_detections` 100 to every
+  `preprocess` and the cases `levit_style` (Levit, `{shortest_edge 28}`, crop 28 -> ShortestEdgeCenterCrop, resize 32,
+  Bicubic), `crop_no_size` (DeiT `{h,w 32}`, do_center_crop, no crop_size, resample 2 -> Stretch, Bilinear, warning
+  UnsupportedResize), `resample_box` (ViT, resample 4 -> Box), `resample_bad` (ViT, resample "bicubic" -> Bilinear +
+  UnsupportedResize) and `effnet_default` (EfficientNet, no resample -> Nearest). `RESAMPLE_DEFAULTS` (37 classes) is
+  pinned by a pytest that imports every `image_processing_*.py` and prints modules that fail to import. Every image case
+  is cross-checked against `AutoImageProcessor(use_fast=False).resample` (`resample_bad` skipped: HF keeps the string);
+  LeViT is also compared pixel-wise with a manual PIL resize + centre crop. Hidden variant: sizes 48 (LeViT S 42, crop 44, resize 48).
   Worst-case cases (WP3.6b): `small_vocab` (Gather table 30000 rows, hidden: vocab-1000) and `short_positions`
   (position table 32 rows, hidden 16; MaxTokens 64, hidden 48) pass a Hello world run but fail the worst case
   (`SmokeRunFailed`); the script checks this on onnxruntime and also runs the worst case on the two reference text models.

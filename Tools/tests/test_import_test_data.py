@@ -158,7 +158,8 @@ def test_schema_keys(doc):
                    "preferred_device", "onnx"}
     pre = {"max_tokens", "add_special_tokens", "pooling", "normalize_embeddings", "image_width", "image_height",
            "resize_mode", "resize_shortest_edge", "resize_width", "resize_height",
-           "rescale_factor", "image_mean", "image_std", "score_activation"}
+           "rescale_factor", "image_mean", "image_std", "score_activation",
+           "resample", "nms_iou_threshold", "max_detections"}
     for c in doc["cases"]:
         assert c["expect"] in ("valid", "validation_error", "parse_error")
         assert set(c) == (base if c["expect"] == "parse_error" else full), c["id"]
@@ -185,7 +186,7 @@ def test_valid_tiny_onnx_blocks_match_files(doc):
         path = os.path.join(_root(doc, c), c["folder"], c["model_file"])
         assert m.onnx_block(path) == c["onnx"], c["id"]
         n += 1
-    assert n == 12
+    assert n == 17  # 12 + the 5 WP4.4a cases
 
 
 def test_tiny_models_check_and_run(doc):
@@ -454,3 +455,136 @@ def test_c25_cases_hidden_variant(tmp_path):
     assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
     with open(gold, "r", encoding="utf-8") as f:
         _check_c25_cases(json.load(f), "hidden")
+
+
+# ---- WP4.4a / C32 resample, LeViT rule, crop without size -------------------------------------------------------------
+
+def test_resample_defaults_match_installed_transformers():
+    found, failed = m.scan_resample_defaults()
+    print("modules that failed to import: %s" % (failed or "none"))
+    assert len(found) > 50  # the scan really ran
+    want = {k: v for k, v in found.items() if v != 2}
+    assert m.RESAMPLE_DEFAULTS == want
+    assert len(m.RESAMPLE_DEFAULTS) == 37
+
+
+def _resample(pre):
+    return m.image_preprocess(pre)["resample"]
+
+
+def test_resample_explicit_values():
+    for v, name in enumerate(["Nearest", "Lanczos", "Bilinear", "Bicubic", "Box", "Hamming"]):
+        assert _resample({"resample": v}) == name
+    assert _resample({"resample": 3.0}) == "Bicubic"
+    assert m.image_warnings({"resample": 3.0}) == []
+
+
+def test_resample_invalid_values_are_bilinear_with_warning():
+    for bad in ("bicubic", "3", 3.5, 7, -1, None, True, [3]):
+        pre = {"image_processor_type": "DeiTImageProcessor", "resample": bad}  # DeiT default would be Bicubic
+        assert _resample(pre) == "Bilinear", bad
+        assert m.image_warnings(pre) == ["UnsupportedResize"], bad
+
+
+def test_resample_class_defaults():
+    assert _resample({"image_processor_type": "DeiTImageProcessor"}) == "Bicubic"
+    assert _resample({"image_processor_type": "DeiTImageProcessorFast"}) == "Bicubic"
+    assert _resample({"feature_extractor_type": "DeiTFeatureExtractor"}) == "Bicubic"
+    assert _resample({"image_processor_type": "ViTImageProcessor"}) == "Bilinear"
+    assert _resample({"image_processor_type": "EfficientNetImageProcessor"}) == "Nearest"
+    assert _resample({"image_processor_type": "SmolVLMImageProcessor"}) == "Lanczos"
+    assert _resample({}) == "Bilinear"
+    assert _resample(None) == "Bilinear"
+
+
+def test_new_preprocess_keys_present_everywhere():
+    for pre in (None, {}, {"size": 224, "crop_pct": 0.875}):
+        r = m.image_preprocess(pre)
+        assert r["nms_iou_threshold"] == 0.7 and r["max_detections"] == 100
+
+
+def test_levit_rule():
+    pre = {"image_processor_type": "LevitImageProcessor", "size": {"shortest_edge": 224}, "do_center_crop": True,
+           "crop_size": 224}
+    assert _fields(m.image_preprocess(pre)) == ("ShortestEdgeCenterCrop", 0, 0, 256, 224, 224)
+    pre = {"image_processor_type": "LevitImageProcessor", "size": 40, "do_center_crop": True, "crop_size": 32}
+    assert _fields(m.image_preprocess(pre)) == ("ShortestEdgeCenterCrop", 0, 0, 45, 32, 32)
+    pre = {"image_processor_type": "LevitImageProcessor", "size": {"shortest_edge": 224}}  # no crop: unchanged
+    assert _fields(m.image_preprocess(pre)) == ("Stretch", 0, 0, 0, 224, 224)
+    pre = {"image_processor_type": "CLIPImageProcessor", "size": {"shortest_edge": 224}, "do_center_crop": True,
+           "crop_size": 224}
+    assert m.image_preprocess(pre)["resize_shortest_edge"] == 224
+
+
+def test_crop_without_size_warning():
+    pre = {"size": {"height": 32, "width": 32}, "do_center_crop": True}
+    assert m.image_warnings(pre) == ["UnsupportedResize"]
+    assert m.image_warnings({"size": {"height": 32, "width": 32}, "do_center_crop": False}) == []
+    assert m.image_warnings({"size": {"height": 32, "width": 32}, "do_center_crop": True,
+                             "crop_size": 32}) == []
+    assert m.image_warnings({"size": {"shortest_edge": 32}, "do_center_crop": True}) == []  # rule 4 warns elsewhere
+    assert m.image_warnings(None) == []
+
+
+# case -> (fields, resample, warning codes)
+EXPECTED_C32 = {
+    "visible": {"levit_style": (("ShortestEdgeCenterCrop", 0, 0, 32, 28, 28), "Bicubic", []),
+                "crop_no_size": (("Stretch", 0, 0, 0, 32, 32), "Bilinear", ["UnsupportedResize"]),
+                "resample_box": (("Stretch", 0, 0, 0, 32, 32), "Box", []),
+                "resample_bad": (("Stretch", 0, 0, 0, 32, 32), "Bilinear", ["UnsupportedResize"]),
+                "effnet_default": (("Stretch", 0, 0, 0, 32, 32), "Nearest", [])},
+    "hidden": {"levit_style": (("ShortestEdgeCenterCrop", 0, 0, 48, 44, 44), "Bicubic", []),
+               "crop_no_size": (("Stretch", 0, 0, 0, 48, 48), "Bilinear", ["UnsupportedResize"]),
+               "resample_box": (("Stretch", 0, 0, 0, 48, 48), "Box", []),
+               "resample_bad": (("Stretch", 0, 0, 0, 48, 48), "Bilinear", ["UnsupportedResize"]),
+               "effnet_default": (("Stretch", 0, 0, 0, 48, 48), "Nearest", [])},
+}
+
+
+def _check_c32_cases(doc, variant):
+    by_id = {c["id"]: c for c in doc["cases"]}
+    root = doc.get("import_root", doc["models_root"])
+    for case_id, (fields, resample, warns) in EXPECTED_C32[variant].items():
+        c = by_id[case_id]
+        assert c["expect"] == "valid" and c["error_codes"] == [], case_id
+        assert c["warning_codes"] == warns, case_id
+        assert c["task"] == "ImageClassification" and len(c["labels"]) == 3
+        assert _fields(c["preprocess"]) == fields, case_id
+        assert c["preprocess"]["resample"] == resample, case_id
+        assert c["onnx"]["inputs"][0]["shape"] == [-1, 3, fields[5], fields[4]], case_id
+        assert c["license"]["spdx_id"] == "Apache-2.0"
+        assert os.path.isfile(os.path.join(root, c["folder"], "model.onnx"))
+
+
+def _check_new_keys(doc):
+    for c in doc["cases"]:
+        if "preprocess" in c:
+            p = c["preprocess"]
+            assert p["nms_iou_threshold"] == 0.7 and p["max_detections"] == 100, c["id"]
+            assert p["resample"] in m.RESAMPLE_NAMES.values(), c["id"]
+    by_id = {c["id"]: c for c in doc["cases"]}
+    if "resnet-50" in by_id:
+        assert by_id["resnet-50"]["preprocess"]["resample"] == "Bicubic"
+    if "rtdetr_r18vd" in by_id:
+        assert by_id["rtdetr_r18vd"]["preprocess"]["resample"] == "Bilinear"
+
+
+def test_c32_cases_visible(doc):
+    _check_c32_cases(doc, "visible")
+    _check_new_keys(doc)
+
+
+def test_c32_cases_hidden_variant(tmp_path):
+    import subprocess
+    out = tmp_path / "models"
+    gold = tmp_path / "import_expectations.json"
+    r = subprocess.run([sys.executable, os.path.join(TOOLS, "make_import_test_data.py"), "--variant", "hidden",
+                        "--out-models", str(out), "--out-goldens", str(gold)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if "NEEDS:" in (r.stderr + r.stdout):
+        pytest.skip("hidden tokenizers missing")
+    assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+    with open(gold, "r", encoding="utf-8") as f:
+        d = json.load(f)
+    _check_c32_cases(d, "hidden")
+    _check_new_keys(d)

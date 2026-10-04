@@ -172,15 +172,46 @@ def _usable_crop(pre):
     return None
 
 
+# C32: the `resample` default of each slow image processor class whose __init__ default is not Bilinear (PIL values:
+# 0 Nearest, 1 Lanczos, 3 Bicubic). Any other class (and an empty class name) defaults to Bilinear (2). Pinned by a
+# pytest that re-scans transformers 4.57.6.
+RESAMPLE_DEFAULTS = {n + "ImageProcessor": 3 for n in """
+Aria Beit Bit Blip BridgeTower CLIP ChineseCLIP DPT DeepseekVLHybrid DeepseekVL DeiT Emu3 Flava Glm4v GotOcr2
+InstructBlipVideo Janus Levit Llava LlavaNext LlavaNextVideo LlavaOnevision Ovis2 OwlViT Perceiver Pixtral PoolFormer
+PromptDepthAnything Qwen2VL SegGpt Siglip VideoLlava Vilt
+""".split()}
+RESAMPLE_DEFAULTS.update({"ChameleonImageProcessor": 1, "Idefics3ImageProcessor": 1, "SmolVLMImageProcessor": 1,
+                          "EfficientNetImageProcessor": 0})
+RESAMPLE_NAMES = {0: "Nearest", 1: "Lanczos", 2: "Bilinear", 3: "Bicubic", 4: "Box", 5: "Hamming"}
+LEVIT = "LevitImageProcessor"
+
+
+def derive_resample(pre, cls):
+    """C32 rule 1: (PIL int, warn). `resample` present and an integer 0..5 (int, or float with is_integer(); bool
+    excluded) -> that value; absent -> class default (Bilinear if unlisted); anything else -> Bilinear + warning."""
+    if "resample" not in pre:
+        return RESAMPLE_DEFAULTS.get(cls, 2), False
+    v = pre["resample"]
+    if isinstance(v, bool):
+        return 2, True
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    if isinstance(v, int) and 0 <= v <= 5:
+        return v, False
+    return 2, True
+
+
 def image_preprocess(pre):
     """Image fields from a preprocessor_config dict (None = file missing). Implements C14 rule 7 as replaced by C25."""
     out = {"image_width": 224, "image_height": 224, "resize_mode": "Stretch", "resize_shortest_edge": 0,
            "resize_width": 0, "resize_height": 0,
-           "rescale_factor": F32_255, "image_mean": list(IMAGENET_MEAN), "image_std": list(IMAGENET_STD)}
+           "rescale_factor": F32_255, "image_mean": list(IMAGENET_MEAN), "image_std": list(IMAGENET_STD),
+           "resample": "Bilinear", "nms_iou_threshold": 0.7, "max_detections": 100}
     if pre is None:
         return out
     size = pre.get("size")
     cls = processor_class_name(pre)
+    out["resample"] = RESAMPLE_NAMES[derive_resample(pre, cls)[0]]
     hw = None  # (rw, rh) from an object size or a square-default integer
     shortest = None
     if isinstance(size, dict) and "height" in size and "width" in size:
@@ -209,7 +240,8 @@ def image_preprocess(pre):
         crop = _usable_crop(pre)
         if crop is not None:
             out["resize_mode"] = "ShortestEdgeCenterCrop"
-            out["resize_shortest_edge"] = shortest
+            # rule 2: LeViT resizes to int(256/224 * S) before the centre crop
+            out["resize_shortest_edge"] = int((256.0 / 224.0) * shortest) if cls == LEVIT else shortest
             out["image_width"], out["image_height"] = crop
         else:
             out["image_width"] = out["image_height"] = shortest
@@ -224,6 +256,46 @@ def image_preprocess(pre):
         out["image_mean"] = [0.0, 0.0, 0.0]
         out["image_std"] = [1.0, 1.0, 1.0]
     return out
+
+
+def image_warnings(pre):
+    """Warning codes the parser must raise for a preprocessor_config dict, restricted to the C32 rules 1 and 3
+    (UnsupportedResize for a bad `resample`, or do_center_crop without crop_size in the height/width paths)."""
+    if pre is None:
+        return []
+    if derive_resample(pre, processor_class_name(pre))[1]:
+        return ["UnsupportedResize"]
+    size = pre.get("size")
+    if (isinstance(size, dict) and "height" in size and "width" in size and pre.get("do_center_crop")
+            and pre.get("crop_size") is None):
+        return ["UnsupportedResize"]
+    return []
+
+
+def scan_resample_defaults():
+    """Import every transformers/models/*/image_processing_*.py (no _fast); for each class ending in ImageProcessor
+    with a `resample` parameter on __init__ record the default as an int. Returns (all {class: int}, {module: error})."""
+    import glob
+    import importlib
+    import inspect
+    import transformers
+    root = os.path.join(os.path.dirname(transformers.__file__), "models")
+    found, failed = {}, {}
+    for path in sorted(glob.glob(os.path.join(root, "*", "image_processing_*.py"))):
+        if path.endswith("_fast.py"):
+            continue
+        mod = "transformers.models.%s.%s" % (os.path.basename(os.path.dirname(path)), os.path.basename(path)[:-3])
+        try:
+            mm = importlib.import_module(mod)
+        except Exception as e:  # noqa: BLE001
+            failed[mod] = repr(e)[:120]
+            continue
+        for n, c in inspect.getmembers(mm, inspect.isclass):
+            if n.endswith("ImageProcessor") and c.__module__ == mod:
+                p = inspect.signature(c.__init__).parameters.get("resample")
+                if p is not None and p.default is not inspect.Parameter.empty:
+                    found[n] = int(p.default)
+    return found, failed
 
 
 def scan_shortest_edge_classes():
@@ -488,7 +560,8 @@ def params(variant):
             det_h=32, det_w=32, det_q=5, det_labels=["person", "crate"],
             two_labels=["NEGATIVE", "POSITIVE"], mismatch_labels=["yes", "no"],
             small_vocab_rows=30000, pos_rows=32, pos_sbert=64,
-            deit=dict(size=40, crop=32, hw_size=(48, 40), hw_crop=(36, 32), nocrop=32))
+            deit=dict(size=40, crop=32, hw_size=(48, 40), hw_crop=(36, 32), nocrop=32),
+            rs=dict(levit_s=28, levit_crop=28, size=32))
     return dict(
         emb_hidden=6, emb_tok="t5-small", cls_tok="gpt2",
         cls_labels=["sunny", "rain", "ñandú", "snow", "fog"], cls_max_pos=96,
@@ -498,7 +571,8 @@ def params(variant):
         det_h=48, det_w=40, det_q=7, det_labels=["drone", "kite", "balloon"],
         two_labels=["BAD", "GOOD"], mismatch_labels=["lo", "mid", "hi", "top"],
         small_vocab_rows=-1000, pos_rows=16, pos_sbert=48,
-        deit=dict(size=52, crop=44, hw_size=(60, 50), hw_crop=(48, 40), nocrop=44))
+        deit=dict(size=52, crop=44, hw_size=(60, 50), hw_crop=(48, 40), nocrop=44),
+        rs=dict(levit_s=42, levit_crop=44, size=48))
 
 
 def jbytes(obj):
@@ -771,6 +845,7 @@ class Builder:
 
         # C25 resize-then-crop cases: tiny image classifiers whose input is the crop / stretch size
         dp = p["deit"]
+        rs = p["rs"]
         labels3 = ["cat", "dog", "fox"]
         common = {"do_resize": True, "do_rescale": True, "rescale_factor": 0.00392156862745098, "do_normalize": True,
                   "image_mean": p["img_mean"], "image_std": p["img_std"]}
@@ -786,6 +861,18 @@ class Builder:
                                      crop_size=dp["crop"]), (dp["crop"], dp["crop"])),
             ("square_int_nocrop", dict(image_processor_type="DeiTImageProcessor", size=dp["nocrop"],
                                        do_center_crop=False), (dp["nocrop"], dp["nocrop"])),
+            # WP4.4 / C32: resample, LeViT rule, crop without size
+            ("levit_style", dict(image_processor_type="LevitImageProcessor", size={"shortest_edge": rs["levit_s"]},
+                                 do_center_crop=True, crop_size=hw((rs["levit_crop"], rs["levit_crop"]))),
+             (rs["levit_crop"], rs["levit_crop"])),
+            ("crop_no_size", dict(image_processor_type="DeiTImageProcessor", size=hw((rs["size"], rs["size"])),
+                                  do_center_crop=True, resample=2), (rs["size"], rs["size"])),
+            ("resample_box", dict(image_processor_type="ViTImageProcessor", size=hw((rs["size"], rs["size"])),
+                                  resample=4), (rs["size"], rs["size"])),
+            ("resample_bad", dict(image_processor_type="ViTImageProcessor", size=hw((rs["size"], rs["size"])),
+                                  resample="bicubic"), (rs["size"], rs["size"])),
+            ("effnet_default", dict(image_processor_type="EfficientNetImageProcessor",
+                                    size=hw((rs["size"], rs["size"])), do_center_crop=False), (rs["size"], rs["size"])),
         ]
         for case_id, pre, (mw, mh) in c25:
             d = self.folder(case_id)
@@ -796,7 +883,7 @@ class Builder:
             body.update(common)
             self.write(d, "preprocessor_config.json", jbytes(body))
             self.write(d, "modelpipelines.json", jbytes(full_license(case_id)))
-            self.add(case_id, "valid")
+            self.add(case_id, "valid", warnings=image_warnings(body))
 
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -1024,7 +1111,51 @@ def crosscheck_reference(slug, folder, exp):
     print("  cross-checked %s against transformers %s" % (slug, transformers.__version__))
 
 
-C25_CASES = ["deit_style", "deit_hw_crop", "deit_legacy_fe", "clip_style_crop", "square_int_nocrop"]
+C25_CASES = ["deit_style", "deit_hw_crop", "deit_legacy_fe", "clip_style_crop", "square_int_nocrop",
+             "levit_style", "resample_box", "effnet_default"]
+# HF cross-check of the c25 mode/size is skipped for these: HF has no equivalent (crop_no_size: HF would crop to the
+# processor default 224; resample_bad: HF keeps the string and fails/differs at resize time)
+C25_SKIP = {"crop_no_size", "resample_bad"}
+RESAMPLE_SKIP = {"resample_bad": "HF keeps resample='bicubic' as a string (not a PIL int); differs by design"}
+
+
+def crosscheck_resample(case_id, folder, pp):
+    """HF slow processor's .resample must equal the derived PIL int; LeViT: output on a 300x200 image must equal
+    PIL resize to the derived shortest edge + centre crop + rescale + normalize."""
+    from PIL import Image
+    from transformers import AutoImageProcessor
+    if case_id in RESAMPLE_SKIP:
+        print("  resample cross-check %s: skipped (%s)" % (case_id, RESAMPLE_SKIP[case_id]))
+        return
+    import shutil
+    import tempfile
+    # load from a copy holding only preprocessor_config.json: transformers reads other files with the locale
+    # encoding on Windows, which breaks on the non-ASCII labels in config.json
+    with tempfile.TemporaryDirectory() as tmp:
+        shutil.copyfile(os.path.join(folder, "preprocessor_config.json"), os.path.join(tmp, "preprocessor_config.json"))
+        proc = AutoImageProcessor.from_pretrained(tmp, use_fast=False)
+    got = int(proc.resample)
+    want = {v: k for k, v in RESAMPLE_NAMES.items()}[pp["resample"]]
+    if got != want:
+        raise SystemExit("FAIL: %s derived resample %s (%d) != transformers %d" % (case_id, pp["resample"], want, got))
+    extra = ""
+    if type(proc).__name__ == LEVIT:
+        rng = np.random.RandomState(3)
+        img = Image.fromarray(rng.randint(0, 256, (200, 300, 3), dtype=np.uint8))
+        hf = proc(images=img, return_tensors="np")["pixel_values"][0]
+        s = pp["resize_shortest_edge"]
+        w, h = (int(s * 300 / 200), s)  # 300x200 landscape: short side = height
+        r = img.resize((w, h), resample=want)
+        cw, ch = pp["image_width"], pp["image_height"]
+        l, t = int(round((w - cw) / 2.0)), int(round((h - ch) / 2.0))
+        arr = np.asarray(r.crop((l, t, l + cw, t + ch)), dtype=np.float32) * np.float32(pp["rescale_factor"])
+        arr = (arr - np.array(pp["image_mean"], np.float32)) / np.array(pp["image_std"], np.float32)
+        mine = arr.transpose(2, 0, 1)
+        d = float(np.abs(mine - hf).max())
+        if d > 1e-4:
+            raise SystemExit("FAIL: %s LeViT manual resize+crop differs from HF output by %g" % (case_id, d))
+        extra = " levit_manual_max_abs_diff=%.2e" % d
+    print("  resample cross-check %s: %s (%d) == transformers%s" % (case_id, pp["resample"], got, extra))
 
 
 def crosscheck_c25(case_id, folder, pp):
@@ -1043,7 +1174,10 @@ def crosscheck_c25(case_id, folder, pp):
               and proc.crop_size.get("height") == pp["image_height"] and proc.crop_size.get("width") == pp["image_width"]
               and (oh, ow) == (pp["image_height"], pp["image_width"]) and pp["resize_shortest_edge"] == 0)
     elif mode == "ShortestEdgeCenterCrop":
-        ok = (bool(proc.do_center_crop) and size.get("shortest_edge") == pp["resize_shortest_edge"]
+        s = size.get("shortest_edge")
+        if type(proc).__name__.removesuffix("Fast") == LEVIT:  # HF LevitImageProcessor.resize scales S by 256/224 itself
+            s = int((256 / 224) * s)
+        ok = (bool(proc.do_center_crop) and s == pp["resize_shortest_edge"]
               and (oh, ow) == (pp["image_height"], pp["image_width"])
               and pp["resize_width"] == 0 and pp["resize_height"] == 0)
     else:
@@ -1106,6 +1240,10 @@ def main():
             crosscheck_c25(r["id"], os.path.join(b.root, r["id"]), r["preprocess"])
     models_root = os.path.join(dev, "models")
     records += reference_cases(models_root)
+    for r in records:
+        if r.get("task") in ("ImageClassification", "ObjectDetection") and r["expect"] == "valid":
+            base = models_root if r["reference"] else out_models
+            crosscheck_resample(r["id"], os.path.join(base, r["folder"]), r["preprocess"])
     check_reference_worst_cases(models_root, records)
     import onnx
     import onnxruntime

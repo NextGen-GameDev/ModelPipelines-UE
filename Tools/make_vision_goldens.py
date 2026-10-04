@@ -494,10 +494,9 @@ def resample_name(cfg, cls):
 
 
 def make_settings(cfg, cls_name, cls):
-    """C14/C25 rules via make_import_test_data.image_preprocess, then the C32 LeViT rule and the resample name."""
+    """C14/C25/C32 rules via make_import_test_data.image_preprocess (incl. LeViT), then the resample name."""
     s = mit.image_preprocess(cfg)
-    if cls_name == "LevitImageProcessor" and s["resize_mode"] == "ShortestEdgeCenterCrop":
-        s["resize_shortest_edge"] = int((256 / 224) * s["resize_shortest_edge"])
+    # the C32 LeViT rule now lives in image_preprocess (WP4.4a)
     order = ["image_width", "image_height", "resize_mode", "resize_shortest_edge", "resize_width", "resize_height"]
     out = {k: s[k] for k in order}
     out["resample"] = resample_name(cfg, cls)

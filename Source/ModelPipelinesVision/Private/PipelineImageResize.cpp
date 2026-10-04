@@ -59,7 +59,8 @@ namespace UE::ModelPipelines::Vision::Private
 				return 0.0;
 			}
 			X = X * Pi;
-			return std::sin(X) / X * (0.54 + 0.46 * std::cos(X));
+			// Pillow writes 0.54f / 0.46f (float literals promoted to double); bit-exactness depends on it.
+			return std::sin(X) / X * ((double)0.54f + (double)0.46f * std::cos(X));
 		}
 
 		double BicubicFilter(double X)
@@ -200,14 +201,106 @@ namespace UE::ModelPipelines::Vision::Private
 			return (uint8)(In >> PrecisionBits);
 		}
 
-		/** Interleaved RGB rows used between the passes. */
-		struct FRgbRows
+		/** One uint8 RGB pixel of the intermediate image between the passes (Pillow stores it as uint8). */
+		struct FRgb8
 		{
-			TArray<uint8> Data;
-			int32 Width = 0;
-			int32 FirstRow = 0; // source row index of Data's row 0
-			int32 NumRows = 0;
+			uint8 R;
+			uint8 G;
+			uint8 B;
 		};
+		static_assert(sizeof(FRgb8) == 3, "FRgb8 must be packed RGB");
+
+		/** Upper bound of the intermediate buffer, in bytes (C27: bounded; the passes run in strips). */
+		constexpr int64 MaxIntermediateBytes = int64(4) << 20;
+
+		FORCEINLINE void StorePixel(FRgb8& Dst, uint32 S0, uint32 S1, uint32 S2)
+		{
+			Dst.R = Clip8(S0);
+			Dst.G = Clip8(S1);
+			Dst.B = Clip8(S2);
+		}
+
+		FORCEINLINE void StorePixel(FColor& Dst, uint32 S0, uint32 S1, uint32 S2)
+		{
+			Dst = FColor(Clip8(S0), Clip8(S1), Clip8(S2), 255);
+		}
+
+		/**
+		 * Horizontal pass (Pillow ImagingResampleHorizontal_8bpc) for output columns [First, First + Count) of H (indices
+		 * relative to the columns H was computed for). SrcRow[c - ColBase] is source column c.
+		 */
+		template <typename TSrc, typename TDst>
+		void HorizontalRow(const TSrc* SrcRow, int32 ColBase, const FAxisCoeffs& H, int32 First, int32 Count, TDst* Dst)
+		{
+			const int32 KSize = H.KSize;
+			for (int32 X = 0; X < Count; ++X)
+			{
+				const int32 Xi = First + X;
+				const int32 XMin = H.Bounds[Xi * 2] - ColBase;
+				const int32 XCount = H.Bounds[Xi * 2 + 1];
+				const int32* K = &H.K[(int64)Xi * KSize];
+				uint32 S0 = 1u << (PrecisionBits - 1);
+				uint32 S1 = S0;
+				uint32 S2 = S0;
+				const TSrc* Src = SrcRow + XMin;
+				for (int32 i = 0; i < XCount; ++i)
+				{
+					const uint32 W = (uint32)K[i];
+					S0 += (uint32)Src[i].R * W;
+					S1 += (uint32)Src[i].G * W;
+					S2 += (uint32)Src[i].B * W;
+				}
+				StorePixel(Dst[X], S0, S1, S2);
+			}
+		}
+
+		/**
+		 * Vertical pass (Pillow ImagingResampleVertical_8bpc) for output row Yi of V over NumCols columns. Base points at
+		 * source row RowBase, first column; Stride is the source row pitch in pixels.
+		 */
+		template <typename TSrc, typename TDst>
+		void VerticalRow(const TSrc* Base, int64 Stride, int32 RowBase, const FAxisCoeffs& V, int32 Yi, int32 NumCols, TDst* Dst)
+		{
+			const int32 YMin = V.Bounds[Yi * 2] - RowBase;
+			const int32 YCount = V.Bounds[Yi * 2 + 1];
+			const int32* K = &V.K[(int64)Yi * V.KSize];
+			const TSrc* Row0 = Base + (int64)YMin * Stride;
+			for (int32 X = 0; X < NumCols; ++X)
+			{
+				uint32 S0 = 1u << (PrecisionBits - 1);
+				uint32 S1 = S0;
+				uint32 S2 = S0;
+				const TSrc* P = Row0 + X;
+				for (int32 i = 0; i < YCount; ++i)
+				{
+					const uint32 W = (uint32)K[i];
+					S0 += (uint32)P->R * W;
+					S1 += (uint32)P->G * W;
+					S2 += (uint32)P->B * W;
+					P += Stride;
+				}
+				StorePixel(Dst[X], S0, S1, S2);
+			}
+		}
+
+		/** [First, Last) source range touched by all Count indices of C. */
+		void SourceRange(const FAxisCoeffs& C, int32 Count, int32& OutFirst, int32& OutLast)
+		{
+			OutFirst = C.Bounds[0];
+			OutLast = C.Bounds[0] + C.Bounds[1];
+			for (int32 i = 1; i < Count; ++i)
+			{
+				OutFirst = FMath::Min(OutFirst, C.Bounds[i * 2]);
+				OutLast = FMath::Max(OutLast, C.Bounds[i * 2] + C.Bounds[i * 2 + 1]);
+			}
+		}
+
+		/** Strip length so that Strip * BytesPerUnit <= MaxIntermediateBytes, clamped to [1, Total]. */
+		int32 StripLength(int64 BytesPerUnit, int32 Total)
+		{
+			const int64 Fit = MaxIntermediateBytes / FMath::Max<int64>(BytesPerUnit, 1);
+			return (int32)FMath::Clamp<int64>(Fit, 1, (int64)Total);
+		}
 
 		void ResizeNearestRegion(const FPipelineImage& In, int32 OutWidth, int32 OutHeight, int32 X0, int32 Y0, int32 RW, int32 RH, FPipelineImage& Out)
 		{
@@ -281,112 +374,84 @@ namespace UE::ModelPipelines::Vision::Private
 		const bool bNeedHorizontal = OutWidth != In.Width;
 		const bool bNeedVertical = OutHeight != In.Height;
 
+		FAxisCoeffs Horiz;
+		if (bNeedHorizontal)
+		{
+			ComputeCoeffs(In.Width, OutWidth, X0, RW, Def, Horiz);
+		}
 		FAxisCoeffs Vert;
-		int32 RowFirst = Y0;
-		int32 RowLast = Y0 + RH; // exclusive, source rows feeding the vertical pass (or the output rows if none)
 		if (bNeedVertical)
 		{
 			ComputeCoeffs(In.Height, OutHeight, Y0, RH, Def, Vert);
-			RowFirst = Vert.Bounds[0];
-			RowLast = Vert.Bounds[(RH - 1) * 2] + Vert.Bounds[(RH - 1) * 2 + 1];
-			for (int32 i = 0; i < RH; ++i)
-			{
-				RowFirst = FMath::Min(RowFirst, Vert.Bounds[i * 2]);
-				RowLast = FMath::Max(RowLast, Vert.Bounds[i * 2] + Vert.Bounds[i * 2 + 1]);
-			}
 		}
 
-		// Horizontal pass (or a plain column copy) over the needed source rows, region columns only.
-		FRgbRows Temp;
-		Temp.Width = RW;
-		Temp.FirstRow = RowFirst;
-		Temp.NumRows = FMath::Max(RowLast - RowFirst, 0);
-		Temp.Data.SetNumUninitialized((int64)Temp.NumRows * RW * 3);
-		if (bNeedHorizontal)
-		{
-			FAxisCoeffs Horiz;
-			ComputeCoeffs(In.Width, OutWidth, X0, RW, Def, Horiz);
-			const int32 KSize = Horiz.KSize;
-			for (int32 R = 0; R < Temp.NumRows; ++R)
-			{
-				const FColor* SrcRow = &In.Pixels[(int64)(RowFirst + R) * In.Width];
-				uint8* Dst = &Temp.Data[(int64)R * RW * 3];
-				for (int32 X = 0; X < RW; ++X)
-				{
-					const int32 XMin = Horiz.Bounds[X * 2];
-					const int32 XCount = Horiz.Bounds[X * 2 + 1];
-					const int32* K = &Horiz.K[X * KSize];
-					uint32 S0 = 1u << (PrecisionBits - 1);
-					uint32 S1 = S0;
-					uint32 S2 = S0;
-					const FColor* Src = SrcRow + XMin;
-					for (int32 i = 0; i < XCount; ++i)
-					{
-						const uint32 W = (uint32)K[i];
-						S0 += (uint32)Src[i].R * W;
-						S1 += (uint32)Src[i].G * W;
-						S2 += (uint32)Src[i].B * W;
-					}
-					Dst[X * 3 + 0] = Clip8(S0);
-					Dst[X * 3 + 1] = Clip8(S1);
-					Dst[X * 3 + 2] = Clip8(S2);
-				}
-			}
-		}
-		else
-		{
-			for (int32 R = 0; R < Temp.NumRows; ++R)
-			{
-				const FColor* SrcRow = &In.Pixels[(int64)(RowFirst + R) * In.Width + X0];
-				uint8* Dst = &Temp.Data[(int64)R * RW * 3];
-				for (int32 X = 0; X < RW; ++X)
-				{
-					Dst[X * 3 + 0] = SrcRow[X].R;
-					Dst[X * 3 + 1] = SrcRow[X].G;
-					Dst[X * 3 + 2] = SrcRow[X].B;
-				}
-			}
-		}
+		const FColor* Src = In.Pixels.GetData();
+		const int64 SrcStride = In.Width;
 
 		if (!bNeedVertical)
 		{
-			// Temp rows are exactly the region rows.
+			// Horizontal only, straight from the source rows of the window.
 			for (int32 Y = 0; Y < RH; ++Y)
 			{
-				const uint8* Src = &Temp.Data[(int64)Y * RW * 3];
-				FColor* DstRow = &Out.Pixels[(int64)Y * RW];
-				for (int32 X = 0; X < RW; ++X)
+				HorizontalRow(Src + (int64)(Y0 + Y) * SrcStride, 0, Horiz, 0, RW, &Out.Pixels[(int64)Y * RW]);
+			}
+			return;
+		}
+		if (!bNeedHorizontal)
+		{
+			// Vertical only, straight from the source columns of the window.
+			for (int32 Y = 0; Y < RH; ++Y)
+			{
+				VerticalRow(Src + X0, SrcStride, 0, Vert, Y, RW, &Out.Pixels[(int64)Y * RW]);
+			}
+			return;
+		}
+
+		TArray<FRgb8> Temp;
+		// Pillow 12 Image.resize: when height > width * 100 and the height shrinks, it resizes to (width, out_height) first,
+		// then to (out_width, out_height), each stored as uint8 (C27 tall-image rule). So the vertical pass runs first.
+		const bool bVerticalFirst = (int64)In.Height > (int64)In.Width * 100 && OutHeight < In.Height;
+		if (bVerticalFirst)
+		{
+			// Vertical pass over the source columns the horizontal pass needs, in strips of output rows (each output row of
+			// the horizontal pass depends only on the same intermediate row).
+			int32 ColFirst = 0;
+			int32 ColLast = 0;
+			SourceRange(Horiz, RW, ColFirst, ColLast);
+			const int32 NumCols = FMath::Max(ColLast - ColFirst, 1);
+			const int32 StripRows = StripLength((int64)NumCols * (int64)sizeof(FRgb8), RH);
+			Temp.SetNumUninitialized(StripRows * NumCols); // <= MaxIntermediateBytes / 3 elements
+			for (int32 Strip = 0; Strip < RH; Strip += StripRows)
+			{
+				const int32 Rows = FMath::Min(StripRows, RH - Strip);
+				for (int32 R = 0; R < Rows; ++R)
 				{
-					DstRow[X] = FColor(Src[X * 3 + 0], Src[X * 3 + 1], Src[X * 3 + 2], 255);
+					FRgb8* TempRow = Temp.GetData() + (int64)R * NumCols;
+					VerticalRow(Src + ColFirst, SrcStride, 0, Vert, Strip + R, ColLast - ColFirst, TempRow);
+					HorizontalRow(TempRow, ColFirst, Horiz, 0, RW, &Out.Pixels[(int64)(Strip + R) * RW]);
 				}
 			}
 			return;
 		}
 
-		const int32 KSize = Vert.KSize;
-		const int64 Stride = (int64)RW * 3;
-		for (int32 Y = 0; Y < RH; ++Y)
+		// Horizontal pass first (over the source rows the vertical pass needs), then vertical, in strips of output columns
+		// (each output column depends only on its own coefficients, so the strips are bit-identical to one pass).
+		int32 RowFirst = 0;
+		int32 RowLast = 0;
+		SourceRange(Vert, RH, RowFirst, RowLast);
+		const int32 NumRows = FMath::Max(RowLast - RowFirst, 1);
+		const int32 StripCols = StripLength((int64)NumRows * (int64)sizeof(FRgb8), RW);
+		Temp.SetNumUninitialized(StripCols * NumRows); // <= MaxIntermediateBytes / 3 elements
+		for (int32 Strip = 0; Strip < RW; Strip += StripCols)
 		{
-			const int32 YMin = Vert.Bounds[Y * 2] - RowFirst;
-			const int32 YCount = Vert.Bounds[Y * 2 + 1];
-			const int32* K = &Vert.K[Y * KSize];
-			FColor* DstRow = &Out.Pixels[(int64)Y * RW];
-			const uint8* Base = Temp.Data.GetData() + (int64)YMin * Stride;
-			for (int32 X = 0; X < RW; ++X)
+			const int32 Cols = FMath::Min(StripCols, RW - Strip);
+			for (int32 R = 0; R < RowLast - RowFirst; ++R)
 			{
-				uint32 S0 = 1u << (PrecisionBits - 1);
-				uint32 S1 = S0;
-				uint32 S2 = S0;
-				const uint8* P = Base + X * 3;
-				for (int32 i = 0; i < YCount; ++i)
-				{
-					const uint32 W = (uint32)K[i];
-					S0 += (uint32)P[0] * W;
-					S1 += (uint32)P[1] * W;
-					S2 += (uint32)P[2] * W;
-					P += Stride;
-				}
-				DstRow[X] = FColor(Clip8(S0), Clip8(S1), Clip8(S2), 255);
+				HorizontalRow(Src + (int64)(RowFirst + R) * SrcStride, 0, Horiz, Strip, Cols, Temp.GetData() + (int64)R * Cols);
+			}
+			for (int32 Y = 0; Y < RH; ++Y)
+			{
+				VerticalRow(Temp.GetData(), (int64)Cols, RowFirst, Vert, Y, Cols, &Out.Pixels[(int64)Y * RW + Strip]);
 			}
 		}
 	}
@@ -396,12 +461,15 @@ namespace UE::ModelPipelines::Vision
 {
 	bool ResizeImage(const FPipelineImage& In, int32 OutWidth, int32 OutHeight, EPipelineImageResample Filter, FPipelineImage& Out)
 	{
-		Out = FPipelineImage();
+		// In and Out may be the same object: read In completely before Out is written.
 		if (!In.IsValid() || !Private::IsResizeSizeAllowed(OutWidth, OutHeight) || !Private::IsValidResample(Filter))
 		{
+			Out = FPipelineImage();
 			return false;
 		}
-		Private::ResizeImageRegion(In, OutWidth, OutHeight, Filter, 0, 0, OutWidth, OutHeight, Out);
+		FPipelineImage Result;
+		Private::ResizeImageRegion(In, OutWidth, OutHeight, Filter, 0, 0, OutWidth, OutHeight, Result);
+		Out = MoveTemp(Result);
 		return true;
 	}
 }

@@ -52,7 +52,7 @@ namespace UE::ModelPipelines::VisionTests
 	bool HasRhi();
 
 	/**
-	 * Transient texture with the image's pixels (B8G8R8A8 / R8G8B8A8 / FloatRGBA with v/255 as half floats; A copied as is).
+	 * Transient texture with the image's pixels (B8G8R8A8 / R8G8B8A8 / FloatRGBA with v/255 as half floats, A included as A/255).
 	 * NeverStream, UpdateResource called. nullptr when there is no RHI, the image is invalid or the format is unsupported.
 	 */
 	UTexture2D* MakeTexture(const FPipelineImage& Image, EPixelFormat Format);

@@ -440,7 +440,7 @@ void FPipelineReadbackSpec::Define()
 		TSharedRef<FCapturePtr, ESPMode::ThreadSafe> Slot = MakeShared<FCapturePtr, ESPMode::ThreadSafe>();
 		TSharedRef<std::atomic<bool>, ESPMode::ThreadSafe> Started = MakeShared<std::atomic<bool>, ESPMode::ThreadSafe>(false);
 		UTexture* Tex = Cast<UTexture>(Keep.Get());
-		Async(EAsyncExecution::ThreadPool, [Slot, Started, Tex]()
+		Async(EAsyncExecution::Thread, [Slot, Started, Tex]()
 		{
 			*Slot = StartRead(Tex);
 			Started->store(true);

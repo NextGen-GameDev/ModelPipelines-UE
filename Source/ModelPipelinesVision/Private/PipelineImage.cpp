@@ -118,25 +118,31 @@ namespace UE::ModelPipelines::Vision
 	FPipelineResult PreprocessImage(const FPipelineImage& In, const FPipelinePreprocessSettings& Settings,
 		TArray<float>& OutCHW, FPipelineImage* OutCropped, FPipelineImageGeometry* OutGeometry)
 	{
+		// OutCropped may alias In (PreprocessImage(Img, S, T, &Img)): In is read completely before OutCropped is written, and
+		// OutCropped is only cleared on failure paths, after the last read of In.
 		OutCHW.Reset();
-		if (OutCropped)
-		{
-			*OutCropped = FPipelineImage();
-		}
 		if (OutGeometry)
 		{
 			*OutGeometry = FPipelineImageGeometry();
 		}
+		auto Fail = [OutCropped](EPipelineError Error, const FString& Message)
+		{
+			if (OutCropped)
+			{
+				*OutCropped = FPipelineImage();
+			}
+			return FPipelineResult::Fail(Error, Message);
+		};
 
 		FString Reason;
 		if (!In.IsValid(&Reason))
 		{
-			return FPipelineResult::Fail(EPipelineError::InvalidArgument, FString::Printf(TEXT("Invalid image: %s."), *Reason));
+			return Fail(EPipelineError::InvalidArgument, FString::Printf(TEXT("Invalid image: %s."), *Reason));
 		}
 		Reason = CheckSettings(Settings);
 		if (!Reason.IsEmpty())
 		{
-			return FPipelineResult::Fail(EPipelineError::PreprocessFailed, FString::Printf(TEXT("Image preprocess settings not usable: %s."), *Reason));
+			return Fail(EPipelineError::PreprocessFailed, FString::Printf(TEXT("Image preprocess settings not usable: %s."), *Reason));
 		}
 
 		// 1. Resize size (C27). Computed in int64/double and checked before any allocation.
@@ -176,7 +182,7 @@ namespace UE::ModelPipelines::Vision
 		}
 		if (!Private::IsResizeSizeAllowed(ResizedW, ResizedH))
 		{
-			return FPipelineResult::Fail(EPipelineError::PreprocessFailed, FString::Printf(
+			return Fail(EPipelineError::PreprocessFailed, FString::Printf(
 				TEXT("Image resize size %lld x %lld (from %d x %d) is outside the limits (sides 1..65536, at most 2^26 pixels)."),
 				(long long)ResizedW, (long long)ResizedH, W, H));
 		}
@@ -189,7 +195,7 @@ namespace UE::ModelPipelines::Vision
 		if (Left < 0 || Top < 0 || Left + CropW > ResizedW || Top + CropH > ResizedH)
 		{
 			// Unreachable after CheckSettings (resize >= crop); kept as a guard, never a crash.
-			return FPipelineResult::Fail(EPipelineError::PreprocessFailed, FString::Printf(
+			return Fail(EPipelineError::PreprocessFailed, FString::Printf(
 				TEXT("Crop %d x %d does not fit the resized image %lld x %lld."), CropW, CropH, (long long)ResizedW, (long long)ResizedH));
 		}
 

@@ -10,6 +10,7 @@
 
 class UPipelineModelPackage;
 class UImageClassificationPipeline;
+class UObjectDetectionPipeline;
 
 /** Creators of the vision task pipelines (docs/contracts.md C29). */
 UCLASS()
@@ -21,4 +22,8 @@ public:
 	/** Game thread. New pipeline (outer: transient package; hold it in a UPROPERTY) or nullptr with OutResult saying why. */
 	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Vision")
 	static UImageClassificationPipeline* CreateImageClassificationPipeline(UPipelineModelPackage* Package, FPipelineResult& OutResult);
+
+	/** Game thread. New pipeline (outer: transient package; hold it in a UPROPERTY) or nullptr with OutResult saying why. */
+	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Vision")
+	static UObjectDetectionPipeline* CreateObjectDetectionPipeline(UPipelineModelPackage* Package, FPipelineResult& OutResult);
 };

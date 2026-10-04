@@ -536,10 +536,39 @@ namespace UE::ModelPipelines::Vision::Private
 			Tasks = MoveTemp(GOutstanding);
 			GOutstanding.Reset();
 		}
-		if (Tasks.Num() > 0 && !UE::Tasks::Wait(Tasks, FTimespan::FromSeconds(ShutdownWaitSeconds)))
+		// Poll instead of UE::Tasks::Wait: Wait may retract a delivery task and run it inline on this (game)
+		// thread, which would run OnRead off its contract thread and can deadlock a callback that marshals back.
+		const double Deadline = FPlatformTime::Seconds() + ShutdownWaitSeconds;
+		auto AllDone = [&Tasks]()
+		{
+			for (const UE::Tasks::FTask& T : Tasks)
+			{
+				if (!T.IsCompleted())
+				{
+					return false;
+				}
+			}
+			return true;
+		};
+		while (!AllDone() && FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Sleep(0.001f);
+		}
+		if (!AllDone())
 		{
 			UE_LOG(LogModelPipelinesVision, Warning, TEXT("Texture read callbacks still running after %.0f s at shutdown."), ShutdownWaitSeconds);
 		}
+	}
+
+	/** Module startup: clears the shut-down state so a module restart can read again. */
+	void StartupTextureReader()
+	{
+		if (GPreExitHandle.IsValid())
+		{
+			FCoreDelegates::OnEnginePreExit.Remove(GPreExitHandle);
+			GPreExitHandle.Reset();
+		}
+		GShutDown = false;
 	}
 
 	void ShutdownTextureReader()
@@ -610,7 +639,14 @@ namespace UE::ModelPipelines::Vision
 			return FailNow(EPipelineError::PreprocessFailed, FString::Printf(TEXT("texture '%s' is a virtual texture and cannot be read back; disable Virtual Texture Streaming on it, or use a render target"),
 				*Texture->GetName()));
 		}
-		const EPixelFormat Format = Texture2D ? Texture2D->GetPixelFormat(0) : RenderTarget->GetFormat();
+#if WITH_EDITOR
+		// A texture still in async compilation exposes the default placeholder's format and resource.
+		if (Texture->IsCompiling())
+		{
+			return FailNow(EPipelineError::PreprocessFailed, FString::Printf(TEXT("texture '%s' is still compiling; retry when it has finished"), *Texture->GetName()));
+		}
+#endif
+		const EPixelFormat Format = Texture2D ?Texture2D->GetPixelFormat(0) : RenderTarget->GetFormat();
 		if (ReadableBytesPerPixel(Format) == 0)
 		{
 			return FailNow(EPipelineError::PreprocessFailed, FString::Printf(
@@ -626,6 +662,7 @@ namespace UE::ModelPipelines::Vision
 		State->Resource = Resource;
 		State->Format = Format;
 		UE::Tasks::FTask Task = LaunchDelivery(State, false);
+		// Known limitation: with -norenderthread this command runs inline, so the copy cost lands on the game thread.
 		ENQUEUE_RENDER_COMMAND(ModelPipelinesVisionReadStart)([State](FRHICommandListImmediate& RHICmdList)
 		{
 			StartCopyOnRenderThread(RHICmdList, *State);

@@ -11,10 +11,13 @@ namespace UE::ModelPipelines::Vision::Private
 {
 	/** PipelineTextureReader.cpp: completes pending texture reads with Cancelled and waits for their callbacks. */
 	void ShutdownTextureReader();
+	/** PipelineTextureReader.cpp: clears the shut-down state so a restarted module can read again. */
+	void StartupTextureReader();
 }
 
 void FModelPipelinesVisionModule::StartupModule()
 {
+	UE::ModelPipelines::Vision::Private::StartupTextureReader();
 }
 
 void FModelPipelinesVisionModule::ShutdownModule()

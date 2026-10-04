@@ -22,6 +22,7 @@
 #include "RHIGlobals.h"
 #include "Tasks/Task.h"
 #include "UObject/GarbageCollection.h"
+#include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 #include "PipelineImage.h"

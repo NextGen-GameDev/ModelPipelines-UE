@@ -705,8 +705,8 @@ void FPipelineReadbackSpec::Define()
 			LatentIt(*PerfName, FTimespan::FromSeconds(240), [this, PerfName, PerfFormat](const FDoneDelegate& Done)
 			{
 				// 1920x1080 render target, 20 reads one after another (after one warm-up read that is not counted, because the
-				// first call pays one-time costs such as ticker registration). Gates: MaxGameThreadMsPerRead < 1 ms (the
-				// PLAN M4 acceptance: no game-thread wait) and every ReadTexturePixelsAsync call itself < 0.5 ms. A read that
+				// first call pays one-time costs such as ticker registration). Gates (D8): per-read game-thread ms median < 1 ms and
+				// p90 < 0.2 ms, call p90 < 0.2 ms; the max is reported only. A read that
 				// waits for the GPU on the game thread (FlushRenderingCommands, Lock on the game thread) costs several ms here.
 				if (!RequireRhi(*this))
 				{
@@ -751,15 +751,18 @@ void FPipelineReadbackSpec::Define()
 							TArray<double> Sorted = St->LastMs;
 							Sorted.Sort();
 							const double Median = Sorted.Num() ? Sorted[Sorted.Num() / 2] : 0.0;
-							double MaxCall = 0.0;
-							for (const double C : St->CallMs)
-							{
-								MaxCall = FMath::Max(MaxCall, C);
-							}
-							AddInfo(FString::Printf(TEXT("%s: game-thread ms per read: max %.3f, median %.3f; max ReadbackWaitMs %.2f; max call %.3f ms (measured by the test)"),
-								*PerfName, S.MaxGameThreadMsPerRead, Median, S.MaxReadbackWaitMs, MaxCall));
-							TestTrue(*FString::Printf(TEXT("%s: MaxGameThreadMsPerRead %.3f ms must be < 1 ms"), *PerfName, S.MaxGameThreadMsPerRead), S.MaxGameThreadMsPerRead < 1.0);
-							TestTrue(*FString::Printf(TEXT("%s: the ReadTexturePixelsAsync call itself, worst %.3f ms, must be < 0.5 ms"), *PerfName, MaxCall), MaxCall < 0.5);
+							const double P90 = Sorted.Num() ? Sorted[FMath::Min(Sorted.Num() - 1, (Sorted.Num() * 9) / 10)] : 0.0;
+							TArray<double> Calls = St->CallMs;
+							Calls.Sort();
+							const double MaxCall = Calls.Num() ? Calls.Last() : 0.0;
+							const double P90Call = Calls.Num() ? Calls[FMath::Min(Calls.Num() - 1, (Calls.Num() * 9) / 10)] : 0.0;
+							// D8 (Noah, 2026-10-04): gate median and p90 (median < 1 ms, p90 < 0.2 ms); the max is reported only,
+							// because rare OS/engine thread-wake stalls on the game thread are scheduling noise, not plugin work.
+							AddInfo(FString::Printf(TEXT("%s: game-thread ms per read: median %.3f, p90 %.3f, max %.3f (reported, not gated); call median %.3f, p90 %.3f, max %.3f ms; max ReadbackWaitMs %.2f"),
+								*PerfName, Median, P90, S.MaxGameThreadMsPerRead, Calls.Num() ? Calls[Calls.Num() / 2] : 0.0, P90Call, MaxCall, S.MaxReadbackWaitMs));
+							TestTrue(*FString::Printf(TEXT("%s: game-thread ms per read, median %.3f must be < 1 ms"), *PerfName, Median), Median < 1.0);
+							TestTrue(*FString::Printf(TEXT("%s: game-thread ms per read, p90 %.3f must be < 0.2 ms"), *PerfName, P90), P90 < 0.2);
+							TestTrue(*FString::Printf(TEXT("%s: the ReadTexturePixelsAsync call itself, p90 %.3f must be < 0.2 ms"), *PerfName, P90Call), P90Call < 0.2);
 							TestEqual(*FString::Printf(TEXT("%s: NumStarted"), *PerfName), S.NumStarted, (int64)20);
 							TestEqual(*FString::Printf(TEXT("%s: NumSucceeded"), *PerfName), S.NumSucceeded, (int64)20);
 							TestEqual(*FString::Printf(TEXT("%s: NumFailed"), *PerfName), S.NumFailed, (int64)0);

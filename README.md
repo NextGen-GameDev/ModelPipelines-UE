@@ -4,11 +4,22 @@ Run Hugging Face ONNX models as task pipelines in Unreal Engine: text embeddings
 classification, image classification and object detection, from C++ and Blueprints, on
 Unreal's Neural Network Engine (NNE).
 
-**Status:** early development (milestone M1: plugin skeleton and NNE backend). Not ready for use.
+**Status:** early development. Draft documentation below; the API may still change.
 
 - Platform: Win64. Engines: UE 5.8 (primary) and 5.7.
 - Depends on the [Tokenizers](https://github.com/NextGen-GameDev/Tokenizers-UE) plugin and
   the engine's NNERuntimeORT plugin.
+
+## Documentation
+
+Start at [Docs/README.md](Docs/README.md).
+
+- [Install](Docs/Install.md)
+- [Get and import models](Docs/ImportModel.md)
+- [Samples](Docs/Samples.md): four ready-to-play maps
+- [Blueprint nodes and C++ calls](Docs/Nodes.md)
+- [Troubleshooting](Docs/Troubleshooting.md)
+- [Model licenses](Docs/ModelLicenses.md)
 
 ## License
 

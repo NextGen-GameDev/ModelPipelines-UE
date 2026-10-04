@@ -1,0 +1,2 @@
+# Extra packages for developing the Tools (running their tests). Install requirements.txt first.
+pytest==9.1.1

@@ -1,0 +1,71 @@
+{
+ "schema": "pipelines-sample-images/1",
+ "images": [
+  {
+   "name": "classify_jellyfish",
+   "purpose": "classify",
+   "page_url": "https://commons.wikimedia.org/wiki/File:Pair_of_Jellyfish_Float_Happily.jpg",
+   "file_url": "https://upload.wikimedia.org/wikipedia/commons/6/6f/Pair_of_Jellyfish_Float_Happily.jpg",
+   "sha256": "e948cdfe4a226f90349e79f4686bcb08efa98610071d275e4a3cad8e7a282a65",
+   "license": "CC0-1.0",
+   "license_source": "CC0",
+   "author": "CGiblets",
+   "expect": {"top1_any_of": ["jellyfish"], "min_score": 0.5}
+  },
+  {
+   "name": "classify_soccer_ball",
+   "purpose": "classify",
+   "page_url": "https://commons.wikimedia.org/wiki/File:Ball_soccer_1990s2.jpg",
+   "file_url": "https://upload.wikimedia.org/wikipedia/commons/b/bf/Ball_soccer_1990s2.jpg",
+   "sha256": "f370c224c984207c83b30332effe1b083fe54ff9784518f4b528e8bffb282136",
+   "license": "CC0-1.0",
+   "license_source": "CC0",
+   "author": "Rakoon",
+   "expect": {"top1_any_of": ["soccer ball"], "min_score": 0.5}
+  },
+  {
+   "name": "classify_violin",
+   "purpose": "classify",
+   "page_url": "https://commons.wikimedia.org/wiki/File:Violin_VL100.png",
+   "file_url": "https://upload.wikimedia.org/wikipedia/commons/1/1b/Violin_VL100.png",
+   "sha256": "4a528bcb0547e2f92fe62cfedc3845fd8859c40027e2fc7e646ae7d2af10e414",
+   "license": "CC0-1.0",
+   "license_source": "CC0",
+   "author": "Just plain Bill",
+   "expect": {"top1_any_of": ["violin"], "min_score": 0.5}
+  },
+  {
+   "name": "classify_elephant",
+   "purpose": "classify",
+   "page_url": "https://commons.wikimedia.org/wiki/File:Thirukurungkudi_Temple_Elephant.jpg",
+   "file_url": "https://upload.wikimedia.org/wikipedia/commons/a/ad/Thirukurungkudi_Temple_Elephant.jpg",
+   "sha256": "4a0fa678695fddd9a2707cd86cd2fdc7fa48c88e9a14025b38f5d624f3f71e48",
+   "license": "CC0-1.0",
+   "license_source": "CC0",
+   "author": "Nanjil Bala",
+   "expect": {"top1_any_of": ["Indian elephant", "African elephant"], "min_score": 0.5}
+  },
+  {
+   "name": "detect_dog_walk",
+   "purpose": "detect",
+   "page_url": "https://commons.wikimedia.org/wiki/File:Fort_Greene_Brooklyn_NY_assorted_photos_near_Fulton_Street_2_lady_walking_four_dogs.jpg",
+   "file_url": "https://upload.wikimedia.org/wikipedia/commons/1/1a/Fort_Greene_Brooklyn_NY_assorted_photos_near_Fulton_Street_2_lady_walking_four_dogs.jpg",
+   "sha256": "2b6dc7069dd683fe91c93d161fb5a77b8aa8e620a69a1cd23b758309b68b9e97",
+   "license": "CC0-1.0",
+   "license_source": "CC0",
+   "author": "Tomwsulcer",
+   "expect": {"threshold": 0.5, "min_detections": 3, "labels_include": ["person", "dog", "car"]}
+  },
+  {
+   "name": "detect_street_market",
+   "purpose": "detect",
+   "page_url": "https://commons.wikimedia.org/wiki/File:Street_market_in_Hanoi,_2003_July_41.jpg",
+   "file_url": "https://upload.wikimedia.org/wikipedia/commons/f/fc/Street_market_in_Hanoi%2C_2003_July_41.jpg",
+   "sha256": "940e8bb521e1c3daff3d0613bd7479504792b1b3bfbb9fb9654df30a7129dd45",
+   "license": "CC0-1.0",
+   "license_source": "CC0",
+   "author": "Syced",
+   "expect": {"threshold": 0.5, "min_detections": 3, "labels_include": ["person", "bicycle"]}
+  }
+ ]
+}

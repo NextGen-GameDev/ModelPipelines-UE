@@ -1,7 +1,9 @@
 """Fetch and export the 4 reference models (WP2.1).
 
-Output: <dev>/models/reference/<slug>/ (model.onnx + the repo's own files + modelpipelines.json)
-and <dev>/models/reference/manifest.json. HF cache: <dev>/cache/hf.
+Output: <out>/<slug>/ (model.onnx + the repo's own files + modelpipelines.json) and <out>/manifest.json.
+Without --out: <out> = <dev>/models/reference and the HF cache is <dev>/cache/hf (the WP2.1 behaviour). With --out the
+dev folder is not needed: the HF cache is the default Hugging Face cache, or --cache DIR.
+The licence of each model comes from its Hugging Face model card metadata and must be apache-2.0, mit or bsd-*.
 """
 import argparse
 import hashlib
@@ -27,6 +29,7 @@ COPY_FILES = ["config.json", "tokenizer.json", "tokenizer_config.json", "special
               "preprocessor_config.json", "modules.json", "sentence_bert_config.json", "1_Pooling/config.json",
               "README.md"]
 OPSET = 17
+HINT = "Import each folder: in the Content Browser right-click the folder Content/Models > Model Pipelines > Import Hugging Face Model Folder... (assets go to /Game/Models; see Docs/ImportModel.md)"
 TEXT = "The blacksmith is in the village."
 
 
@@ -49,6 +52,18 @@ def front_matter_license(readme_path):
     for line in text[3:end].splitlines():
         if line.startswith("license:"):
             return line.split(":", 1)[1].strip().strip("'\"")
+    return None
+
+
+def license_to_spdx(lic):
+    """HF card licence id -> SPDX id for apache-2.0, mit and bsd-*; anything else -> None (refused)."""
+    s = (lic or "").strip().lower()
+    if s == "apache-2.0":
+        return "Apache-2.0"
+    if s == "mit":
+        return "MIT"
+    if s.startswith("bsd-") and len(s) > 4:
+        return "BSD-" + s[4:].replace("-clause", "-Clause")
     return None
 
 
@@ -190,14 +205,17 @@ def ensure_tokenizer_json(slug, folder, snap, entry):
         raise SystemExit("FAIL: %s tokenizer.json differs from the slow tokenizer on %d strings" % (slug, bad))
 
 
-def process(slug, repo, prefix, task, exp_in, exp_out, dev, manifest, force):
+def process(slug, repo, prefix, task, exp_in, exp_out, out_root, cache, tmp_root, manifest, force):
+    """cache None = the default Hugging Face cache."""
     from huggingface_hub import HfApi, hf_hub_download, snapshot_download
-    cache = os.path.join(dev, "cache", "hf")
-    folder = os.path.join(dev, "models", "reference", slug)
+    folder = os.path.join(out_root, slug)
     onnx_path = os.path.join(folder, "model.onnx")
     entry = manifest.get(slug)
     if (not force and entry and os.path.isfile(onnx_path) and sha256_file(onnx_path) == entry.get("sha256")):
         print("%s: up to date (sha256 matches manifest), skipping export" % slug)
+        print("  repo@revision: %s@%s" % (repo, entry["revision"]))
+        print("  license: %s" % entry["license"])
+        print("  folder: %s" % folder)
         if task in ("feature-extraction", "text-classification"):
             pats = [f for f in COPY_FILES if f != "tokenizer.json"] + ["tokenizer.json"]
             try:
@@ -212,8 +230,13 @@ def process(slug, repo, prefix, task, exp_in, exp_out, dev, manifest, force):
     print("%s: %s @ %s" % (slug, repo, sha))
     readme = hf_hub_download(repo, "README.md", revision=sha, cache_dir=cache)
     lic = front_matter_license(readme)
-    if lic != "apache-2.0":
-        raise SystemExit("FAIL: %s license is %r, only apache-2.0 accepted; nothing more downloaded" % (repo, lic))
+    spdx = license_to_spdx(lic)
+    print("  repo@revision: %s@%s" % (repo, sha))
+    print("  license: %s" % lic)
+    print("  folder: %s" % folder)
+    if spdx is None:
+        raise SystemExit("FAIL: %s license is %r, only apache-2.0, mit or bsd-* accepted; nothing more downloaded"
+                         % (repo, lic))
     files = set(api.list_repo_files(repo, revision=sha))
     patterns = [f for f in COPY_FILES if f in files]
     if "2_Normalize/config.json" in files:
@@ -228,7 +251,7 @@ def process(slug, repo, prefix, task, exp_in, exp_out, dev, manifest, force):
     if os.path.isdir(folder):
         shutil.rmtree(folder)
     os.makedirs(folder)
-    tmp = os.path.join(dev, "tmp", "export_" + slug)
+    tmp = os.path.join(tmp_root, "export_" + slug)
     if os.path.isdir(tmp):
         shutil.rmtree(tmp)
     os.makedirs(tmp)
@@ -277,9 +300,9 @@ def process(slug, repo, prefix, task, exp_in, exp_out, dev, manifest, force):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copyfile(os.path.join(snap, f), dst)
     # weights needed in folder for sanity check only via snapshot; load torch model from snapshot
-    sidecar = {"license": {"spdx_id": "Apache-2.0",
+    sidecar = {"license": {"spdx_id": spdx,
                            "source_url": "https://huggingface.co/%s/tree/%s" % (repo, sha),
-                           "attribution": "%s (Hugging Face), Apache-2.0" % repo}}
+                           "attribution": "%s (Hugging Face), %s" % (repo, spdx)}}
     with open(os.path.join(folder, "modelpipelines.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(sidecar, f, indent=2)
         f.write("\n")
@@ -303,25 +326,50 @@ def main():
     ap = argparse.ArgumentParser(description="Fetch the 4 reference models and export them to ONNX.")
     ap.add_argument("--force", action="store_true", help="redo download and export")
     ap.add_argument("--only", help="comma-separated slugs")
+    ap.add_argument("--out", help="output folder: writes <out>/<slug>/ and <out>/manifest.json "
+                                  "(default <dev>/models/reference; the dev folder is then not used)")
+    ap.add_argument("--cache", help="Hugging Face cache folder (default with --out: the default HF cache; "
+                                    "without --out: <dev>/cache/hf)")
     args = ap.parse_args()
-    dev = _paths.dev_dir()
-    os.environ["HF_HOME"] = os.path.join(dev, "cache", "hf")
     os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-    os.makedirs(os.path.join(dev, "models", "reference"), exist_ok=True)
-    mpath = os.path.join(dev, "models", "reference", "manifest.json")
+    if args.out:
+        out_root = os.path.abspath(args.out)
+        cache = os.path.abspath(args.cache) if args.cache else None
+        tmp_root = os.path.join(out_root, ".tmp")
+    else:
+        dev = _paths.dev_dir()
+        out_root = os.path.join(dev, "models", "reference")
+        cache = os.path.abspath(args.cache) if args.cache else os.path.join(dev, "cache", "hf")
+        tmp_root = os.path.join(dev, "tmp")
+        if not args.cache:
+            os.environ["HF_HOME"] = cache
+    if cache:
+        os.environ["HF_HUB_CACHE"] = cache
+    try:
+        os.makedirs(out_root, exist_ok=True)
+    except OSError as e:
+        raise SystemExit("FAIL: cannot create the output folder %s: %s" % (out_root, e))
+    mpath = os.path.join(out_root, "manifest.json")
     manifest = {}
     if os.path.isfile(mpath):
         with open(mpath, "r", encoding="utf-8") as f:
             manifest = json.load(f)
     only = set(args.only.split(",")) if args.only else None
+    if only:
+        unknown = only - {m[0] for m in MODELS}
+        if unknown:
+            raise SystemExit("FAIL: unknown slug(s) %s; known: %s" % (sorted(unknown), [m[0] for m in MODELS]))
     for slug, repo, prefix, task, ein, eout in MODELS:
         if only and slug not in only:
             continue
-        process(slug, repo, prefix, task, ein, eout, dev, manifest, args.force)
+        process(slug, repo, prefix, task, ein, eout, out_root, cache, tmp_root, manifest, args.force)
         with open(mpath, "w", encoding="utf-8", newline="\n") as f:
             json.dump(manifest, f, indent=2, sort_keys=True)
             f.write("\n")
+    if args.out:
+        shutil.rmtree(tmp_root, ignore_errors=True)
     print("done; manifest:", mpath)
+    print(HINT)
 
 
 if __name__ == "__main__":

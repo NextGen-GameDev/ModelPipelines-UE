@@ -107,3 +107,25 @@ Reference photos and goldens, part B (WP4.2, C31):
   detection) or 1e-4 (detection boxes) is skipped with that reason (C31 says fail; the script ends with `NEEDS:` when a pool
   cannot be filled). Every skipped candidate is listed in `skipped` with its reason. `--reference-images` and `--test-images`
   override the PNG folder and the pools file. The hidden variant takes the `*_hidden` pools and copies the selected PNGs next to its JSON.
+
+## For users
+
+Everything here runs with plain Python 3.11 and needs no Unreal Engine and no dev folder.
+
+1. Create a virtual environment and install the pinned packages (the CPU build of torch comes from the PyTorch index):
+   `python -m venv .venv`, activate it, then
+   `pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu`.
+   (`requirements-dev.txt` adds `pytest` for running the Tools tests.)
+2. Get the four reference models as ONNX folders:
+   `python fetch_reference_models.py --out <folder>` (optionally `--only resnet-50`, `--cache <hf cache folder>`).
+   It writes `<folder>/<slug>/` (`model.onnx`, the model's own config files, `modelpipelines.json` with the licence) for
+   `all-MiniLM-L6-v2`, `distilbert-sst2`, `resnet-50` and `rtdetr_r18vd`, plus `<folder>/manifest.json`. Per model it
+   prints the repo and revision, the licence read from the Hugging Face model card (only apache-2.0, mit or bsd-* are
+   accepted, anything else stops the script) and the folder. A rerun skips models that are up to date.
+   Then import each folder in the editor: in the Content Browser right-click the folder Content/Models > Model Pipelines > Import Hugging Face Model Folder... (assets go to /Game/Models).
+3. Sample photos (CC0 or public domain only): `python fetch_sample_images.py [--out <folder>] [--check]` downloads the 6
+   images listed in `data/sample_images.json`, verifies their sha256 and writes `<name>.png` (RGB, long edge <= 1024).
+   `--check` runs resnet-50 and rtdetr_r18vd (PyTorch, the same preprocessing as the goldens) on the PNGs and asserts what
+   each image should show; it needs the folders from step 2 via `--models <folder>` and the HF cache via
+   `--hf-cache <folder>` (defaults point into the dev folder). `--verify-license` re-reads each licence from Wikimedia
+   Commons.

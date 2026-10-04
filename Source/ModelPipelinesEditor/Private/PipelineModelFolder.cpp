@@ -495,6 +495,103 @@ namespace UE::ModelPipelines::FolderPrivate
 		return Cls;
 	}
 
+	/**
+	 * C32 rule 1: processor classes whose slow __init__ default for `resample` is not Bilinear (transformers 4.57.6;
+	 * authoritative list: RESAMPLE_DEFAULTS in Tools/make_import_test_data.py). Any other class -> Bilinear.
+	 */
+	static EPipelineImageResample DefaultResample(const FString& Cls)
+	{
+		struct FEntry { const TCHAR* Cls; EPipelineImageResample Resample; };
+		static const FEntry Table[] = {
+			{TEXT("AriaImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("BeitImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("BitImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("BlipImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("BridgeTowerImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("CLIPImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("ChineseCLIPImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("DPTImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("DeepseekVLHybridImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("DeepseekVLImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("DeiTImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("Emu3ImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("FlavaImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("Glm4vImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("GotOcr2ImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("InstructBlipVideoImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("JanusImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("LevitImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("LlavaImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("LlavaNextImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("LlavaNextVideoImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("LlavaOnevisionImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("Ovis2ImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("OwlViTImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("PerceiverImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("PixtralImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("PoolFormerImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("PromptDepthAnythingImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("Qwen2VLImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("SegGptImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("SiglipImageProcessor"), EPipelineImageResample::Bicubic}, {TEXT("VideoLlavaImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("ViltImageProcessor"), EPipelineImageResample::Bicubic},
+			{TEXT("ChameleonImageProcessor"), EPipelineImageResample::Lanczos}, {TEXT("Idefics3ImageProcessor"), EPipelineImageResample::Lanczos},
+			{TEXT("SmolVLMImageProcessor"), EPipelineImageResample::Lanczos},
+			{TEXT("EfficientNetImageProcessor"), EPipelineImageResample::Nearest},
+		};
+		static_assert(UE_ARRAY_COUNT(Table) == 37, "C32 ResampleDefaults lists 37 classes (33 Bicubic, 3 Lanczos, 1 Nearest)");
+		for (const FEntry& E : Table)
+		{
+			if (Cls.Equals(E.Cls, ESearchCase::CaseSensitive))
+			{
+				return E.Resample;
+			}
+		}
+		return EPipelineImageResample::Bilinear;
+	}
+
+	/** Short text of a JSON value for a report message (any type, never fails). */
+	static FString JsonValueText(const TSharedPtr<FJsonValue>& V)
+	{
+		if (!V.IsValid() || V->Type == EJson::None || V->Type == EJson::Null)
+		{
+			return TEXT("null");
+		}
+		switch (V->Type)
+		{
+		case EJson::Number:
+		{
+			double D = 0.0;
+			V->TryGetNumber(D);
+			return FString::Printf(TEXT("%.17g"), D);
+		}
+		case EJson::String:
+		{
+			FString S;
+			V->TryGetString(S);
+			if (S.Len() > 64)
+			{
+				S = S.Left(64) + TEXT("...");
+			}
+			return FString::Printf(TEXT("\"%s\""), *S);
+		}
+		case EJson::Boolean:
+		{
+			bool B = false;
+			V->TryGetBool(B);
+			return B ? TEXT("true") : TEXT("false");
+		}
+		default:
+			return JsonTypeName(V->Type);
+		}
+	}
+
+	/** C32 rule 1: resample from the file (an exact integer 0..5), else the class default; anything else -> Bilinear + Warning. */
+	static void ReadResample(FContext& Ctx, const TSharedPtr<FJsonObject>& Pre, const TCHAR* File, const FString& Cls, FPipelinePreprocessSettings& P)
+	{
+		if (!Pre->HasField(TEXT("resample")))
+		{
+			P.Resample = DefaultResample(Cls);
+			return;
+		}
+		// Raw field: a present null counts as an invalid value, not as absent.
+		const TSharedPtr<FJsonValue> V = Pre->TryGetField(TEXT("resample"));
+		double D = 0.0;
+		if (V.IsValid() && V->Type == EJson::Number && V->TryGetNumber(D) && FMath::IsFinite(D)
+			&& D == FMath::FloorToDouble(D) && D >= 0.0 && D <= 5.0)
+		{
+			P.Resample = static_cast<EPipelineImageResample>((uint8)D);
+			return;
+		}
+		P.Resample = EPipelineImageResample::Bilinear;
+		Ctx.Warn(ECode::UnsupportedResize, FString::Printf(TEXT("%s: resample %s is not a PIL filter 0..5; using Bilinear"), File, *JsonValueText(V)));
+	}
+
 	/** C25 rule 2: size {height RH, width RW}; StretchCenterCrop with a usable crop, else Stretch RW x RH. */
 	static void ApplyHeightWidthSize(FContext& Ctx, const TSharedPtr<FJsonObject>& Pre, const TCHAR* File, int32 RW, int32 RH, FPipelinePreprocessSettings& P)
 	{
@@ -518,6 +615,12 @@ namespace UE::ModelPipelines::FolderPrivate
 			P.ResizeHeight = 0;
 			P.ImageWidth = RW;
 			P.ImageHeight = RH;
+			if (bCenterCrop && !GetValue(Pre, TEXT("crop_size")).IsValid())
+			{
+				// C32 rule 3.
+				Ctx.Warn(ECode::UnsupportedResize, FString::Printf(TEXT("%s: do_center_crop is set but crop_size is missing; HF would use the processor's default crop. Using %dx%d Stretch; set the crop on the package if needed."),
+					File, RW, RH));
+			}
 		}
 		// ERead::Invalid: the InvalidJson error is already in the report.
 	}
@@ -531,6 +634,9 @@ namespace UE::ModelPipelines::FolderPrivate
 			Ctx.Warn(ECode::MissingPreprocessorConfig, TEXT("preprocessor_config.json not found: using 224x224 Stretch, rescale 1/255 and ImageNet mean/std. Add the file from the model repository if the model expects other preprocessing."));
 			return;
 		}
+
+		const FString ProcessorCls = ProcessorClassName(Pre);
+		ReadResample(Ctx, Pre, File, ProcessorCls, P);
 
 		const TSharedPtr<FJsonValue> SizeV = GetValue(Pre, TEXT("size"));
 		if (SizeV.IsValid())
@@ -608,7 +714,7 @@ namespace UE::ModelPipelines::FolderPrivate
 				}
 				else if (CropPctRead == ERead::Absent)
 				{
-					const FString Cls = bShortestEdgeObject ? FString() : ProcessorClassName(Pre);
+					const FString Cls = bShortestEdgeObject ? FString() : ProcessorCls;
 					if (!bShortestEdgeObject && !Cls.IsEmpty() && !IsShortestEdgeIntClass(Cls))
 					{
 						// Rule 3: HF's square default for an integer size, i.e. {height S, width S}.
@@ -624,7 +730,10 @@ namespace UE::ModelPipelines::FolderPrivate
 						if (CropRead == ERead::Ok)
 						{
 							P.ResizeMode = EPipelineImageResize::ShortestEdgeCenterCrop;
-							P.ResizeShortestEdge = S;
+							// C32 rule 2: LeViT resizes the shortest edge to int(256/224 * S) before the centre crop.
+							P.ResizeShortestEdge = ProcessorCls.Equals(TEXT("LevitImageProcessor"), ESearchCase::CaseSensitive)
+								? (int32)FMath::Clamp((256.0 / 224.0) * (double)S, (double)MIN_int32, (double)MAX_int32)
+								: S;
 							P.ResizeWidth = 0;
 							P.ResizeHeight = 0;
 							P.ImageWidth = CropW;

@@ -292,6 +292,7 @@ namespace PipelineModelFolderSpecPrivate
 				CheckInt(TEXT("resize_shortest_edge"), A.ResizeShortestEdge);
 				CheckInt(TEXT("resize_width"), A.ResizeWidth);
 				CheckInt(TEXT("resize_height"), A.ResizeHeight);
+				if (E->HasField(TEXT("resample"))) { CheckStr(TEXT("resample"), FString(LexToString(A.Resample))); } // C32 (lead, WP4.4)
 				double Rs = 0;
 				E->TryGetNumberField(TEXT("rescale_factor"), Rs);
 				CheckFloat(TEXT("rescale_factor"), A.RescaleFactor, Rs);

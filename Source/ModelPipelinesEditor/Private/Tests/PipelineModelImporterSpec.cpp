@@ -227,6 +227,7 @@ namespace PipelineModelImporterSpecPrivate
 				CheckInt(TEXT("image_height"), A.ImageHeight);
 				CheckStr(TEXT("resize_mode"), ResizeName(A.ResizeMode));
 				CheckInt(TEXT("resize_shortest_edge"), A.ResizeShortestEdge);
+				if (E->HasField(TEXT("resample"))) { CheckStr(TEXT("resample"), FString(LexToString(A.Resample))); } // C32 (lead, WP4.4)
 				double Rs = 0;
 				E->TryGetNumberField(TEXT("rescale_factor"), Rs);
 				CheckFloat(TEXT("rescale_factor"), A.RescaleFactor, Rs);

@@ -34,6 +34,12 @@
 			"PlatformAllowList": [ "Win64" ]
 		},
 		{
+			"Name": "ModelPipelinesSamples",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64" ]
+		},
+		{
 			"Name": "ModelPipelinesEditor",
 			"Type": "Editor",
 			"LoadingPhase": "Default",

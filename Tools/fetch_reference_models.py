@@ -248,19 +248,55 @@ def process(slug, repo, prefix, task, exp_in, exp_out, out_root, cache, tmp_root
     else:
         raise SystemExit("FAIL: %s has no safetensors/pytorch weights" % repo)
     snap = snapshot_download(repo, revision=sha, cache_dir=cache, allow_patterns=patterns)
-    if os.path.isdir(folder):
-        shutil.rmtree(folder)
-    os.makedirs(folder)
+    final = folder
+    stage = os.path.join(tmp_root, "stage_" + slug)  # built here, moved to <out>/<slug> only on success
     tmp = os.path.join(tmp_root, "export_" + slug)
-    if os.path.isdir(tmp):
-        shutil.rmtree(tmp)
+    for d in (stage, tmp):
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+    os.makedirs(stage)
     os.makedirs(tmp)
+    try:
+        _build(slug, repo, task, exp_in, exp_out, snap, sha, lic, spdx, patterns, stage, tmp, manifest)
+        if os.path.isdir(final):
+            shutil.rmtree(final)
+        os.makedirs(os.path.dirname(final), exist_ok=True)
+        shutil.move(stage, final)
+    except BaseException:
+        manifest.pop(slug, None)
+        shutil.rmtree(stage, ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+        if os.path.isdir(final) and not os.listdir(final):
+            os.rmdir(final)  # never leave an empty folder behind
+        raise
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("  wrote %s (%d bytes, opset %d, ir %d, exporter %s)" % (
+        os.path.join(final, "model.onnx"), manifest[slug]["bytes"], manifest[slug]["opset"],
+        manifest[slug]["ir_version"], manifest[slug]["exporter"]))
+
+
+def missing_package_message(slug, e):
+    mod = getattr(e, "name", None) or str(e)
+    return ("FAIL: %s needs the Python module '%s', which is not installed. Install the pinned packages: "
+            "pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu" % (slug, mod))
+
+
+def _build(slug, repo, task, exp_in, exp_out, snap, sha, lic, spdx, patterns, folder, tmp, manifest):
+    """Export into the staging folder `folder`; the caller moves it into place."""
+    onnx_path = os.path.join(folder, "model.onnx")
     exporter = "optimum"
     try:
         if slug == "rtdetr_r18vd":
             raise RuntimeError("use torch.onnx.export for RT-DETR")
         export_optimum(snap, task, tmp)
         src = os.path.join(tmp, "model.onnx")
+    except ImportError as e:
+        if task != "object-detection":
+            raise SystemExit(missing_package_message(slug, e))
+        print("  optimum not used (%s); falling back to torch.onnx.export" % e)
+        exporter = "torch.onnx.export"
+        src = os.path.join(tmp, "model.onnx")
+        export_torch(snap, task, src, exp_in, exp_out)
     except Exception as e:  # noqa: BLE001
         print("  optimum not used (%s); falling back to torch.onnx.export" % e)
         exporter = "torch.onnx.export"
@@ -310,7 +346,6 @@ def process(slug, repo, prefix, task, exp_in, exp_out, out_root, cache, tmp_root
     if [i["name"] for i in ins] != exp_in or [o["name"] for o in outs] != exp_out:
         raise SystemExit("FAIL: %s I/O names %s -> %s differ from contract" % (slug, ins, outs))
     diffs = sanity_check(slug, task, snap, onnx_path)
-    shutil.rmtree(tmp, ignore_errors=True)
     manifest[slug] = {"repo": repo, "revision": sha, "license": lic, "opset": opset, "ir_version": ir,
                       "sha256": sha256_file(onnx_path), "bytes": os.path.getsize(onnx_path),
                       "exporter": exporter, "max_diff": diffs, "inputs": ins, "outputs": outs}
@@ -318,8 +353,6 @@ def process(slug, repo, prefix, task, exp_in, exp_out, out_root, cache, tmp_root
         ensure_tokenizer_json(slug, folder, snap, manifest[slug])
     else:
         manifest[slug]["tokenizer_json"] = "n/a (image model)"
-    print("  wrote %s (%d bytes, opset %d, ir %d, exporter %s)" % (onnx_path, manifest[slug]["bytes"], opset, ir,
-                                                                 exporter))
 
 
 def main():

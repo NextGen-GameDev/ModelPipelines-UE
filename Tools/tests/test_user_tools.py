@@ -1,6 +1,7 @@
 """WP5.3 (C36): user tools. Network-free: downloads are monkeypatched."""
 import hashlib
 import importlib.metadata as md
+import ast
 import io
 import json
 import os
@@ -244,3 +245,181 @@ def test_out_is_a_file_gives_a_clear_error(tmp_path, monkeypatch):
 def test_unknown_slug_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="unknown slug"):
         run_main(monkeypatch, ["--out", str(tmp_path / "o"), "--only", "nope"], lambda *a, **k: None)
+
+
+# ---- requirements completeness ------------------------------------------------------------------------------------
+
+def imported_modules(script, seen=None):
+    """Dotted module names imported anywhere (also inside functions) by `script` and the local modules it imports."""
+    seen = set() if seen is None else seen
+    mods = set()
+    path = os.path.join(TOOLS, script)
+    seen.add(script)
+    tree = ast.parse(open(path, "r", encoding="utf-8").read())
+    for node in ast.walk(tree):
+        names = []
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names = [node.module]
+            # "from pkg import sub" may name a submodule; those are resolved below only if they are modules
+            names += [node.module + "." + a.name for a in node.names if a.name != "*"]
+        for n in names:
+            top = n.split(".")[0]
+            if os.path.isfile(os.path.join(TOOLS, top + ".py")):
+                if top + ".py" not in seen:
+                    mods |= imported_modules(top + ".py", seen)
+                continue
+            mods.add(n)
+    return mods
+
+
+def providing_distributions(module):
+    """Distributions that ship `module` (dotted). None if stdlib. Namespace packages are resolved by file path."""
+    top = module.split(".")[0]
+    if top in sys.stdlib_module_names:
+        return None
+    rel = module.replace(".", "/")
+    dists = set()
+    for dist_name in md.packages_distributions().get(top, []):
+        files = md.distribution(dist_name).files or []
+        for f in files:
+            fp = f.as_posix()
+            if fp == rel + ".py" or fp.startswith(rel + "/"):
+                dists.add(dist_name)
+                break
+    if not dists and "." not in module:
+        dists = set(md.packages_distributions().get(top, []))
+    return dists
+
+
+def required_distributions():
+    found = {}
+    for script in ("fetch_reference_models.py", "fetch_sample_images.py"):
+        for mod in imported_modules(script):
+            d = providing_distributions(mod)
+            if d is None:
+                continue
+            if not d:
+                continue  # "from pkg import name" where name is not a module
+            found[mod] = d
+    return found
+
+
+def norm(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def test_requirements_list_every_distribution_the_scripts_import():
+    pinned = {norm(n) for n in parse_requirements(REQ)}
+    found = required_distributions()
+    assert "optimum.exporters.onnx" in found, "the AST walk must see the import inside export_optimum()"
+    for mod, dists in sorted(found.items()):
+        assert {norm(d) for d in dists} & pinned, "%s is provided by %s, none pinned in requirements.txt" % (
+            mod, sorted(dists))
+    print("distributions found:", sorted({norm(d) for ds in found.values() for d in ds}))
+
+
+def test_optimum_exporter_is_provided_by_optimum_onnx():
+    assert providing_distributions("optimum.exporters.onnx") == {"optimum-onnx"}
+
+
+# ---- failed fetch leaves nothing behind ---------------------------------------------------------------------------
+
+def fake_hub(monkeypatch, tmp_path):
+    import huggingface_hub
+    snap = tmp_path / "snap"
+    snap.mkdir(exist_ok=True)
+    (snap / "README.md").write_text("---\nlicense: apache-2.0\n---\n", encoding="utf-8")
+    (snap / "config.json").write_text("{}", encoding="utf-8")
+
+    class Api:
+        def list_repo_commits(self, repo):
+            class C:
+                commit_id = "1110a243" + "0" * 32
+            return [C()]
+
+        def list_repo_files(self, repo, revision=None):
+            return ["README.md", "config.json", "model.safetensors"]
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", Api)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", lambda *a, **k: str(snap / "README.md"))
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda *a, **k: str(snap))
+    return snap
+
+
+MINILM = frm.MODELS[0]
+
+
+def call_process(out, manifest):
+    slug, repo, prefix, task, ein, eout = MINILM
+    frm.process(slug, repo, prefix, task, ein, eout, str(out), None, str(out / ".tmp"), manifest, False)
+
+
+def test_failed_export_leaves_no_folder(tmp_path, monkeypatch):
+    fake_hub(monkeypatch, tmp_path)
+
+    def boom(*a, **k):
+        raise RuntimeError("export exploded")
+    monkeypatch.setattr(frm, "export_optimum", boom)
+    out = tmp_path / "out"
+    out.mkdir()
+    manifest = {}
+    with pytest.raises(RuntimeError):
+        call_process(out, manifest)
+    assert not (out / "all-MiniLM-L6-v2").exists()
+    assert not (out / ".tmp" / "stage_all-MiniLM-L6-v2").exists()
+    assert manifest == {}
+
+
+def test_failed_export_replaces_nothing_and_removes_stale_empty_folder(tmp_path, monkeypatch):
+    fake_hub(monkeypatch, tmp_path)
+    monkeypatch.setattr(frm, "export_optimum", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    out = tmp_path / "out"
+    (out / "all-MiniLM-L6-v2").mkdir(parents=True)   # the empty folder a failed run used to leave
+    with pytest.raises(RuntimeError):
+        call_process(out, {})
+    assert not (out / "all-MiniLM-L6-v2").exists()
+
+
+def test_missing_exporter_package_gives_one_clear_line(tmp_path, monkeypatch, capsys):
+    fake_hub(monkeypatch, tmp_path)
+
+    def noexp(*a, **k):
+        raise ModuleNotFoundError("No module named 'optimum.exporters.onnx'", name="optimum.exporters.onnx")
+    monkeypatch.setattr(frm, "export_optimum", noexp)
+    out = tmp_path / "out"
+    out.mkdir()
+    with pytest.raises(SystemExit) as ei:
+        call_process(out, {})
+    msg = str(ei.value)
+    nl = chr(10)
+    assert nl not in msg and "optimum.exporters.onnx" in msg and "pip install -r requirements.txt" in msg
+    assert not (out / "all-MiniLM-L6-v2").exists()
+
+
+def test_successful_export_is_moved_into_place_and_detected_up_to_date(tmp_path, monkeypatch, capsys):
+    import onnx
+    from onnx import TensorProto, helper
+    fake_hub(monkeypatch, tmp_path)
+
+    def tiny_export(repo_dir, task, out_dir):
+        ins = [helper.make_tensor_value_info(n, TensorProto.INT64, [1, 4]) for n in frm.MODELS[0][4]]
+        out = helper.make_tensor_value_info("last_hidden_state", TensorProto.FLOAT, [1, 4])
+        node = helper.make_node("Cast", [frm.MODELS[0][4][0]], ["last_hidden_state"], to=TensorProto.FLOAT)
+        g = helper.make_graph([node], "g", ins, [out])
+        onnx.save(helper.make_model(g, opset_imports=[helper.make_opsetid("", 17)]),
+                  os.path.join(out_dir, "model.onnx"))
+    monkeypatch.setattr(frm, "export_optimum", tiny_export)
+    monkeypatch.setattr(frm, "sanity_check", lambda *a, **k: {"last_hidden_state": 0.0})
+    monkeypatch.setattr(frm, "ensure_tokenizer_json", lambda *a, **k: None)
+    out = tmp_path / "out"
+    out.mkdir()
+    manifest = {}
+    call_process(out, manifest)
+    folder = out / "all-MiniLM-L6-v2"
+    assert (folder / "model.onnx").is_file() and (folder / "modelpipelines.json").is_file()
+    assert (folder / "config.json").is_file() and not (out / ".tmp" / "stage_all-MiniLM-L6-v2").exists()
+    capsys.readouterr()
+    call_process(out, manifest)
+    assert "up to date" in capsys.readouterr().out

@@ -110,12 +110,14 @@ Reference photos and goldens, part B (WP4.2, C31):
 
 ## For users
 
-Everything here runs with plain Python 3.11 and needs no Unreal Engine and no dev folder.
+Everything here runs with plain Python (3.11 tested; 3.13 installs, full fetch to be confirmed) and needs no Unreal Engine and no dev folder.
 
 1. Create a virtual environment and install the pinned packages (the CPU build of torch comes from the PyTorch index):
    `python -m venv .venv`, activate it, then
    `pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu`.
-   (`requirements-dev.txt` adds `pytest` for running the Tools tests.)
+   (`requirements-dev.txt` adds `pytest` for running the Tools tests.) Optimum 2.x ships its ONNX exporter in the
+   separate package `optimum-onnx`, which is pinned too. A failed export leaves no folder behind; a missing package is
+   reported on one line with this install command.
 2. Get the four reference models as ONNX folders:
    `python fetch_reference_models.py --out <folder>` (optionally `--only resnet-50`, `--cache <hf cache folder>`).
    It writes `<folder>/<slug>/` (`model.onnx`, the model's own config files, `modelpipelines.json` with the licence) for

@@ -10,6 +10,10 @@ Each preprocess case is cross-checked against an independent implementation of t
 non-zero if HF and C27 disagree. The detection `detections` lists come from a numpy implementation of the C29 decode
 rules 1-4 and the C26 NMS (float64 IoU).
 
+Part B (WP4.2, C31): reference photos (Wikimedia Commons CC0 / Public Domain, fetched by fetch_test_images.py) run through
+resnet-50 and rtdetr_r18vd with PyTorch (offline HF cache, pinned revision) and cross-checked with onnxruntime.
+Adds `reference_images` and `reference_models` to the JSON; the hidden variant uses the *_hidden pools.
+
 Hidden variant: --variant hidden --seed 777 --out-dir <dir> --models-out <dir> (other images, resize pairs and designed
 models; the two importer tiny models are copied into <models-out>/import_test so that models_root is self-contained).
 """
@@ -56,6 +60,17 @@ RESIZE_PAIRS = {
     "hidden": [(0, 256, 192), (3, 427, 240), (5, 300, 20), (4, 256, 180), (6, 5, 7), (7, 256, 256), (8, 200, 300),
                (2, 512, 512), (1, 150, 600), (9, 11, 1000)],
 }
+# C31 reference models: slug, HF repo, task
+REFERENCE_MODELS = [("resnet-50", "microsoft/resnet-50", "ImageClassification"),
+                    ("rtdetr_r18vd", "PekingU/rtdetr_r18vd", "ObjectDetection")]
+REF_POOLS = {"visible": ("cls_visible", "det_visible"), "hidden": ("cls_hidden", "det_hidden")}
+REF_COUNTS = (20, 10)
+CLS_MARGIN_MIN = 0.05
+CLS_ORT_TOL = 1e-3
+DET_ORT_IOU_MIN = 0.99      # C31 (amended 2026-10-03): detection-level ORT-vs-torch match
+DET_ORT_SCORE_TOL = 1e-3
+DET_SCORE_BAND = (0.48, 0.52)
+DET_PAIR_IOU_BAND = (0.65, 0.75)
 PREPROCESS_IMAGES = ["s00", "s01", "s02", "s03", "s04", "s05", "s07", "s08"]
 RTDETR_IMAGES = ["s00", "s02", "s03", "s05"]
 
@@ -609,6 +624,186 @@ def margin_skip_reason(logits, boxes, activation, thr, nms_iou, geom):
     return None
 
 
+# ----------------------------------------------------------------------------------------------------------------
+# Part B: reference images (C31)
+# ----------------------------------------------------------------------------------------------------------------
+
+def load_test_images(path):
+    doc = read_json(path)
+    if doc.get("schema") != "pipelines-test-images/1":
+        raise SystemExit("FAIL: %s is not schema pipelines-test-images/1" % path)
+    return doc
+
+
+def det_selection_reason(logits, boxes):
+    """C31 detection selection rules on the torch outputs (logits [Q, C], boxes [Q, 4]); None = selected."""
+    scores = sigmoid64(np.asarray(logits, dtype=np.float64))
+    lo, hi = DET_SCORE_BAND
+    near = scores[(scores >= lo) & (scores <= hi)]
+    if near.size:
+        return "torch score %.4f in [%.2f, %.2f]" % (float(near[0]), lo, hi)
+    cands = decode_candidates(np.asarray(logits, dtype=np.float32), boxes, "Sigmoid", 0.5, None)
+    lo, hi = DET_PAIR_IOU_BAND
+    for i in range(len(cands)):
+        for j in range(i + 1, len(cands)):
+            if cands[i][1] == cands[j][1]:
+                v = box_iou(cands[i][3], cands[j][3])
+                if lo <= v <= hi:
+                    return "same-class IoU %.4f in [%.2f, %.2f]" % (v, lo, hi)
+    return None
+
+
+def hf_detection_list(proc, outputs, labels):
+    """post_process_object_detection(threshold=0.5), no target sizes: normalized xyxy, unclamped."""
+    res = proc.post_process_object_detection(outputs, threshold=0.5)[0]
+    out = []
+    for sc, lb, bx in zip(res["scores"], res["labels"], res["boxes"]):
+        c = int(lb)
+        out.append({"label": labels[c], "index": c, "score": f32(float(sc)), "box": [f32(float(v)) for v in bx]})
+    return out
+
+
+def run_reference(variant, out_dir, models_root, ref_png_dir, test_images_path, report):
+    """Returns (reference_images, reference_models, reference_generator)."""
+    import onnxruntime as ort
+    import torch
+    import transformers
+    from PIL import Image
+    torch.set_num_threads(1)
+    cache = os.path.join(os.path.dirname(os.path.abspath(models_root)), "cache", "hf")
+    manifest = read_json(os.path.join(models_root, "reference", "manifest.json"))
+    pools = load_test_images(test_images_path)["pools"]
+    cls_pool, det_pool = REF_POOLS[variant]
+    meta = {}
+    for e in pools[cls_pool] + pools[det_pool]:
+        meta[e["id"]] = e
+    selected_images = []  # ids in first-use order
+    models_out = []
+    for (slug, repo, task), want, pool_name in zip(REFERENCE_MODELS, REF_COUNTS, (cls_pool, det_pool)):
+        folder = os.path.join(models_root, "reference", slug)
+        config = read_json(os.path.join(folder, "config.json"))
+        pre = read_json(os.path.join(folder, "preprocessor_config.json"))
+        labels = labels_from_config(config)
+        activation = mit.score_activation(task, config)
+        pp = Preprocessor(pre)
+        entry_m = manifest[slug]
+        cls = transformers.AutoModelForImageClassification if task == "ImageClassification" \
+            else transformers.AutoModelForObjectDetection
+        model = cls.from_pretrained(repo, revision=entry_m["revision"], cache_dir=cache, local_files_only=True,
+                                    dtype=torch.float32).eval()
+        onnx_path = os.path.join(folder, "model.onnx")
+        sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+        entry = {"slug": slug, "folder": "reference/" + slug, "task": task, "reference": "torch",
+                 "repo": repo, "revision": entry_m["revision"], "license": entry_m["license"],
+                 "onnx_sha256": sha256_file(onnx_path),
+                 "package": {"settings": pp.settings, "labels": labels, "score_activation": activation,
+                             "nms_iou_threshold": 0.7, "max_detections": 100}, "cases": [], "skipped": []}
+        if task == "ObjectDetection":
+            entry["score_threshold"] = 0.5
+        worst = {"ort_logits": 0.0, "ort_boxes": 0.0, "min_margin": 1.0, "boxes": 0, "classes": {}, "min_score_gap": 1.0}
+        for e in pools[pool_name]:
+            if len(entry["cases"]) >= want:
+                break
+            sid = e["id"]
+            png = os.path.join(ref_png_dir, sid + ".png")
+            if not os.path.isfile(png):
+                raise SystemExit("NEEDS: %s missing; run Tools/fetch_test_images.py" % png)
+            arr = np.array(Image.open(png).convert("RGB"))
+            hf, _, _, _ = pp.process(arr, "%s/%s" % (slug, sid))
+            with torch.no_grad():
+                out = model(pixel_values=torch.from_numpy(hf))
+            ort_out = dict(zip([o.name for o in sess.get_outputs()], sess.run(None, {"pixel_values": hf})))
+            lg = out.logits.detach().numpy().astype(np.float32)
+            if task == "ImageClassification":
+                logits = lg[0]
+                scores = softmax64(logits)
+                order = np.argsort(-scores, kind="stable")
+                idx = int(order[0])
+                margin = float(scores[order[0]] - scores[order[1]])
+                diff = float(np.max(np.abs(ort_out["logits"][0].astype(np.float64) - logits.astype(np.float64))))
+                ort_idx = int(np.argmax(ort_out["logits"][0]))
+                why = None
+                if diff > CLS_ORT_TOL:
+                    why = "ORT logits differ from torch by %.2e > %g" % (diff, CLS_ORT_TOL)
+                elif margin < CLS_MARGIN_MIN:
+                    why = "top_margin %.4f < %.2f" % (margin, CLS_MARGIN_MIN)
+                elif ort_idx != idx:
+                    why = "ORT argmax %d != torch argmax %d" % (ort_idx, idx)
+                if why:
+                    entry["skipped"].append({"image": sid, "reason": why})
+                    continue
+                worst["ort_logits"] = max(worst["ort_logits"], diff)
+                worst["min_margin"] = min(worst["min_margin"], margin)
+                entry["cases"].append({"image": sid, "logits": [f32(v) for v in logits], "scores": [float(v) for v in scores],
+                                       "index": idx, "label": labels[idx], "top_margin": margin, "ort_max_abs_diff": diff,
+                                       "ort_index": ort_idx})
+            else:
+                bx = out.pred_boxes.detach().numpy().astype(np.float32)
+                d_l = float(np.max(np.abs(ort_out["logits"].astype(np.float64) - lg.astype(np.float64))))
+                d_b = float(np.max(np.abs(ort_out["pred_boxes"].astype(np.float64) - bx.astype(np.float64))))
+                dets = decode_reference(lg[0], bx[0], labels, activation, 0.5, 0.7, 100, None)
+                if not dets:
+                    why = "no detection above 0.5"
+                else:
+                    why = det_selection_reason(lg[0], bx[0])
+                if why:
+                    entry["skipped"].append({"image": sid, "reason": why})
+                    continue
+                # C31 detection-level ORT check: decode ORT exactly like torch; one-to-one match by index
+                ort_dets = decode_reference(ort_out["logits"][0].astype(np.float32),
+                                            ort_out["pred_boxes"][0].astype(np.float32), labels, activation,
+                                            0.5, 0.7, 100, None)
+                min_iou, max_sd = 1.0, 0.0
+                if len(ort_dets) != len(dets):
+                    raise SystemExit("ORT detections differ from torch on %s/%s: %d vs %d detections"
+                                     % (slug, sid, len(ort_dets), len(dets)))
+                for a in dets:
+                    m = [b for b in ort_dets if b["index"] == a["index"]
+                         and box_iou(a["box"], b["box"]) > DET_ORT_IOU_MIN and abs(a["score"] - b["score"]) <= DET_ORT_SCORE_TOL]
+                    if len(m) != 1:
+                        raise SystemExit("ORT detections differ from torch on %s/%s: no one-to-one match for %s"
+                                         % (slug, sid, a))
+                    min_iou = min(min_iou, box_iou(a["box"], m[0]["box"]))
+                    max_sd = max(max_sd, abs(a["score"] - m[0]["score"]))
+                worst["ort_logits"] = max(worst["ort_logits"], d_l)
+                worst["ort_boxes"] = max(worst["ort_boxes"], d_b)
+                worst["ort_det_min_iou"] = min(worst.get("ort_det_min_iou", 1.0), min_iou)
+                worst["ort_det_max_score_diff"] = max(worst.get("ort_det_max_score_diff", 0.0), max_sd)
+                worst["boxes"] += len(dets)
+                for dd in dets:
+                    worst["classes"][dd["label"]] = worst["classes"].get(dd["label"], 0) + 1
+                sc_all = sigmoid64(lg[0].astype(np.float64))
+                worst["min_score_gap"] = min(worst["min_score_gap"], float(np.min(np.abs(sc_all - 0.5))))
+                entry["cases"].append({"image": sid, "detections": dets,
+                                       "hf_detections": hf_detection_list(pp.proc, out, labels),
+                                       "ort_max_abs_diff_logits": d_l, "ort_max_abs_diff_boxes": d_b,
+                                       "ort_detection_min_iou": min_iou, "ort_detection_max_score_diff": max_sd})
+        if len(entry["cases"]) < want:
+            raise SystemExit("NEEDS: pool %s gave only %d of %d %s cases after the selection rules (skipped %d); add "
+                             "candidates to Tools/data/test_images.json; skipped: %s" % (
+                                 pool_name, len(entry["cases"]), want, slug, len(entry["skipped"]), entry["skipped"]))
+        selected_images += [c["image"] for c in entry["cases"]]
+        report["reference"][slug] = dict(worst, skipped=entry["skipped"], selected=[c["image"] for c in entry["cases"]])
+        models_out.append(entry)
+    # reference_images: the selected ones, PNGs copied under out_dir/reference_images when out_dir differs
+    dst_dir = os.path.join(out_dir, "reference_images")
+    os.makedirs(dst_dir, exist_ok=True)
+    images = []
+    for sid in selected_images:
+        src = os.path.join(ref_png_dir, sid + ".png")
+        dst = os.path.join(dst_dir, sid + ".png")
+        if os.path.normcase(os.path.abspath(src)) != os.path.normcase(os.path.abspath(dst)):
+            shutil.copyfile(src, dst)
+        arr = np.array(Image.open(dst).convert("RGB"))
+        e = meta[sid]
+        images.append({"id": sid, "file": "reference_images/%s.png" % sid, "width": int(arr.shape[1]),
+                       "height": int(arr.shape[0]), "rgb_sum": int(arr.astype(np.int64).sum()), "source_url": e["url"],
+                       "license": e["license"], "author": e["author"], "title": e["title"]})
+    gen = {"torch": torch.__version__, "script": SCRIPT, "pools": list(REF_POOLS[variant]),
+           "test_images_sha256": sha256_file(test_images_path)}
+    return images, models_out, gen
+
+
 def run_variant(args):
     import onnxruntime as ort
     import PIL
@@ -623,7 +818,7 @@ def run_variant(args):
     for sub in ("images", "resize", "preprocess"):
         shutil.rmtree(os.path.join(out_dir, sub), ignore_errors=True)
         os.makedirs(os.path.join(out_dir, sub))
-    report = {"skipped": [], "crosscheck": {}, "designs": {}}
+    report = {"skipped": [], "crosscheck": {}, "designs": {}, "reference": {}}
 
     # ---- images
     images = []
@@ -732,12 +927,16 @@ def run_variant(args):
                                        "detections": dets})
         tiny.append(entry)
 
+    ref_images, ref_models, ref_gen = run_reference(variant, out_dir, source_models, os.path.abspath(args.reference_images),
+                                                     os.path.abspath(args.test_images), report)
+
     gen = {"script": SCRIPT, "variant": variant, "seed": seed, "python": platform.python_version(),
            "pillow": PIL.__version__, "numpy": np.__version__, "transformers": transformers.__version__,
            "onnxruntime": ort.__version__}
     doc = {"schema": SCHEMA, "generator": gen, "root": out_dir.replace("\\", "/"),
            "models_root": models_out.replace("\\", "/"), "images": images, "resize_cases": resize_cases,
-           "preprocess_cases": pre_cases, "tiny_models": tiny}
+           "preprocess_cases": pre_cases, "tiny_models": tiny, "reference_images": ref_images,
+           "reference_models": ref_models, "reference_generator": ref_gen}
     json_path = os.path.join(out_dir, "vision_goldens.json")
     with open(json_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
@@ -761,6 +960,10 @@ def main():
                     help="where the designed models are written (hidden: the two importer models are copied here too)")
     ap.add_argument("--source-models", default=os.path.join(dev, "models"),
                     help="models root with import_test/ and reference/ (read only)")
+    ap.add_argument("--reference-images", default=os.path.join(dev, "goldens", "vision", "reference_images"),
+                    help="folder with the PNGs written by fetch_test_images.py")
+    ap.add_argument("--test-images", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "test_images.json"),
+                    help="pinned pools (default Tools/data/test_images.json)")
     args = ap.parse_args()
     if args.seed is None:
         args.seed = DEFAULT_SEEDS[args.variant]
@@ -773,6 +976,13 @@ def main():
     for slug, r in report["designs"].items():
         print("design %-26s IoU best/.8 %.4f  best/.6 %.4f  diff-class %.4f  min score margin %.4f  min nms margin %.4f" % (
             slug, r["iou_best_vs_08"], r["iou_best_vs_06"], r["iou_diff_class"], r["min_score_margin"], r["min_nms_margin"]))
+    for slug, r in report["reference"].items():
+        print("reference %-13s selected %d, skipped %d %s" % (slug, len(r["selected"]), len(r["skipped"]), r["skipped"]))
+        if slug == "resnet-50":
+            print("  min top margin %.4f, ORT max abs diff (logits) %.3e" % (r["min_margin"], r["ort_logits"]))
+        else:
+            print("  boxes total %d, classes %s, min |score-0.5| over all scores %.4f, ORT max diff logits %.3e boxes %.3e" % (
+                r["boxes"], r["classes"], r["min_score_gap"], r["ort_logits"], r["ort_boxes"]))
     for s in report["skipped"]:
         print("SKIPPED " + s)
     if not report["skipped"]:

@@ -477,3 +477,184 @@ def test_hidden_is_deterministic(hidden):
             continue
         assert sha(os.path.join(out_dir, key)) == digest, key
     assert sha(os.path.join(models_out, "vision_test", "tiny_det_designed_sigmoid", "model.onnx")) == first["onnx"]
+
+
+# ---- WP4.2: reference images and reference models (C31) ---------------------------------------------------------
+
+import fetch_test_images as fti  # noqa: E402
+
+TEST_IMAGES = os.path.join(TOOLS, "data", "test_images.json")
+
+
+def pools_doc():
+    with open(TEST_IMAGES, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_license_whitelist_hand_cases():
+    for ok in ("CC0", "CC0 1.0", "Public domain", "Public Domain Mark 1.0", "PD-old", "PDM"):
+        assert fti.is_open_license(ok), ok
+    for bad in ("CC BY 4.0", "CC BY-SA 3.0", "GFDL", "", None, "Attribution", "PDF license", "No restrictions required"):
+        assert not fti.is_open_license(bad), bad
+
+
+def test_strip_html_author():
+    assert fti.strip_html('<a href="x">Jane &amp; Co</a>\n <b>Doe</b>') == "Jane & Co Doe"
+
+
+def test_test_images_pools_counts_ids_licenses_and_disjointness():
+    d = pools_doc()
+    assert d["schema"] == "pipelines-test-images/1"
+    assert fti.validate_doc(d) == []
+    pools = d["pools"]
+    assert list(pools) == ["cls_visible", "cls_hidden", "det_visible", "det_hidden"]
+    assert [len(pools[k]) >= n for k, n in zip(pools, (30, 30, 15, 15))] == [True] * 4
+    prefix = {"cls_visible": "c", "cls_hidden": "ch", "det_visible": "d", "det_hidden": "dh"}
+    seen_ids, seen_urls, seen_titles = set(), set(), set()
+    for pool, entries in pools.items():
+        for i, e in enumerate(entries):
+            assert e["id"] == "%s%02d" % (prefix[pool], i)
+            assert set(e) == {"id", "title", "url", "license", "author", "sha256"}
+            assert fti.is_open_license(e["license"]) and e["license"].strip()
+            assert e["url"].startswith("https://upload.wikimedia.org/") and e["title"].startswith("File:")
+            assert len(e["sha256"]) == 64 and int(e["sha256"], 16) >= 0 and e["author"].strip()
+            assert e["id"] not in seen_ids and e["url"] not in seen_urls and e["title"] not in seen_titles
+            seen_ids.add(e["id"])
+            seen_urls.add(e["url"])
+            seen_titles.add(e["title"])
+
+
+def test_validate_doc_refuses_a_bad_license_and_a_duplicate():
+    d = pools_doc()
+    d["pools"]["cls_visible"][0]["license"] = "CC BY-SA 4.0"
+    assert any("CC BY-SA 4.0" in b for b in fti.validate_doc(d))
+    d = pools_doc()
+    d["pools"]["cls_hidden"][0]["url"] = d["pools"]["cls_visible"][0]["url"]
+    assert any("two pools" in b for b in fti.validate_doc(d))
+
+
+def test_det_selection_reason_hand_cases():
+    # 2 queries, 2 classes; boxes as cx, cy, w, h. A = [0, 0, 1, 1]; B = [0, 0, 1, 0.7] has IoU 0.7 with A.
+    boxes = np.asarray([(0.5, 0.5, 1.0, 1.0), (0.5, 0.35, 1.0, 0.7)], dtype=np.float32)
+    far = np.asarray([[5.0, -9.0], [-9.0, -9.0]], dtype=np.float32)  # one score 0.9933, the rest 1.2e-4
+    assert g.det_selection_reason(far, boxes) is None
+    near = np.asarray([[5.0, -9.0], [0.0, -9.0]], dtype=np.float32)  # sigmoid(0) = 0.5 inside [0.48, 0.52]
+    assert "in [0.48, 0.52]" in g.det_selection_reason(near, boxes)
+    same = np.asarray([[5.0, -9.0], [5.0, -9.0]], dtype=np.float32)  # same class, IoU 0.7 inside [0.65, 0.75]
+    assert "same-class IoU" in g.det_selection_reason(same, boxes)
+    diff = np.asarray([[5.0, -9.0], [-9.0, 5.0]], dtype=np.float32)  # different classes: no pair rule
+    assert g.det_selection_reason(diff, boxes) is None
+    apart = np.asarray([(0.5, 0.5, 1.0, 1.0), (0.5, 0.25, 1.0, 0.5)], dtype=np.float32)  # IoU 0.5: outside the band
+    assert g.det_selection_reason(same, apart) is None
+
+
+@pytest.fixture(scope="module")
+def ref(doc):
+    if "reference_models" not in doc:
+        pytest.skip("regenerate the goldens: reference_models missing")
+    return doc
+
+
+def ref_models(d):
+    return {m["slug"]: m for m in d["reference_models"]}
+
+
+def check_reference(d, hidden):
+    root = d["root"]
+    pools = pools_doc()["pools"]
+    cls_pool, det_pool = ("cls_hidden", "det_hidden") if hidden else ("cls_visible", "det_visible")
+    meta = {e["id"]: e for e in pools[cls_pool] + pools[det_pool]}
+    models = ref_models(d)
+    assert list(models) == ["resnet-50", "rtdetr_r18vd"]
+    rn, rt = models["resnet-50"], models["rtdetr_r18vd"]
+    assert rn["reference"] == rt["reference"] == "torch"
+    assert len(rn["cases"]) == 20 and len(rt["cases"]) == 10
+    # selection = the first passing candidates in pool order (selected + skipped are a prefix of the pool)
+    for m, pool in ((rn, cls_pool), (rt, det_pool)):
+        order = [e["id"] for e in pools[pool]]
+        used = [c["image"] for c in m["cases"]] + [s["image"] for s in m["skipped"]]
+        assert len(set(used)) == len(used) and sorted(used, key=order.index) == order[:len(used)]
+        assert order.index(m["cases"][-1]["image"]) == len(used) - 1
+        assert [c["image"] for c in m["cases"]] == [i for i in order if i in {c["image"] for c in m["cases"]}]
+        assert all(s["reason"] for s in m["skipped"])
+    # images
+    by_id = {i["id"]: i for i in d["reference_images"]}
+    assert set(by_id) == {c["image"] for c in rn["cases"]} | {c["image"] for c in rt["cases"]}
+    for sid, im in by_id.items():
+        assert im["license"] == meta[sid]["license"] and fti.is_open_license(im["license"])
+        assert im["source_url"] == meta[sid]["url"] and im["author"] == meta[sid]["author"]
+        with Image.open(os.path.join(root, im["file"])) as p:
+            assert p.mode == "RGB" and p.size == (im["width"], im["height"]) and max(p.size) <= 1024
+            assert int(np.asarray(p, dtype=np.int64).sum()) == im["rgb_sum"]
+    # classification
+    labels = rn["package"]["labels"]
+    assert len(labels) == 1000 and rn["package"]["score_activation"] == "Softmax"
+    for c in rn["cases"]:
+        s = np.asarray(c["scores"], dtype=np.float64)
+        assert len(c["logits"]) == len(s) == 1000 and abs(s.sum() - 1.0) < 1e-9
+        top2 = np.sort(s)[::-1][:2]
+        assert c["index"] == int(np.argmax(s)) == c["ort_index"] and c["label"] == labels[c["index"]]
+        assert c["top_margin"] == pytest.approx(top2[0] - top2[1], abs=1e-12) and c["top_margin"] >= 0.05
+        assert 0.0 <= c["ort_max_abs_diff"] <= 1e-3
+        assert s[c["index"]] == pytest.approx(g.softmax64(np.asarray(c["logits"], dtype=np.float64))[c["index"]], abs=1e-6)
+    # detection
+    assert rt["score_threshold"] == 0.5 and rt["package"]["score_activation"] == "Sigmoid"
+    dl = rt["package"]["labels"]
+    for c in rt["cases"]:
+        dets = c["detections"]
+        assert len(dets) >= 1 and len(dets) <= len(c["hf_detections"])
+        scores = [x["score"] for x in dets]
+        assert scores == sorted(scores, reverse=True) and all(v > 0.5 for v in scores)
+        for x in dets:
+            assert x["label"] == dl[x["index"]] and len(x["box"]) == 4
+            assert all(0.0 <= v <= 1.0 for v in x["box"]) and x["box"][0] <= x["box"][2] and x["box"][1] <= x["box"][3]
+        assert all(x["score"] > 0.5 for x in c["hf_detections"])
+        assert c["ort_max_abs_diff_logits"] >= 0.0 and c["ort_max_abs_diff_boxes"] >= 0.0  # recorded only (C31 r2)
+        assert c["ort_detection_min_iou"] > 0.99 and 0.0 <= c["ort_detection_max_score_diff"] <= 1e-3
+    return rn, rt
+
+
+def test_reference_sections_visible(ref):
+    rn, rt = check_reference(ref, hidden=False)
+    assert sum(len(c["detections"]) for c in rt["cases"]) >= 10
+
+
+def test_reference_models_record_revision_and_license(ref):
+    manifest = g.read_json(os.path.join(ref["models_root"], "reference", "manifest.json"))
+    for m in ref["reference_models"]:
+        assert m["revision"] == manifest[m["slug"]]["revision"] and len(m["revision"]) == 40
+        assert m["license"] == "apache-2.0" and m["repo"].count("/") == 1
+        assert m["onnx_sha256"] == g.sha256_file(os.path.join(ref["models_root"], m["folder"], "model.onnx"))
+    assert ref["reference_generator"]["torch"]
+
+
+def test_two_classification_cases_recomputed_with_torch(ref):
+    torch = pytest.importorskip("torch")
+    import transformers
+    rn = ref_models(ref)["resnet-50"]
+    cache = os.path.join(DEV, "cache", "hf")
+    try:
+        model = transformers.AutoModelForImageClassification.from_pretrained(
+            rn["repo"], revision=rn["revision"], cache_dir=cache, local_files_only=True, dtype=torch.float32).eval()
+    except Exception as ex:  # cache missing
+        pytest.skip("HF cache not available: %s" % ex)
+    torch.set_num_threads(1)
+    pp = g.Preprocessor(g.read_json(os.path.join(ref["models_root"], rn["folder"], "preprocessor_config.json")))
+    for c in (rn["cases"][0], rn["cases"][-1]):
+        arr = np.array(Image.open(os.path.join(ref["root"], "reference_images", c["image"] + ".png")).convert("RGB"))
+        hf, _, _, _ = pp.process(arr, c["image"])
+        with torch.no_grad():
+            lg = model(pixel_values=torch.from_numpy(hf)).logits[0].numpy()
+        assert int(np.argmax(lg)) == c["index"]
+        assert np.max(np.abs(lg.astype(np.float64) - np.asarray(c["logits"], dtype=np.float64))) < 1e-5
+
+
+def test_hidden_reference_sections(hidden):
+    d = hidden["doc"]
+    rn, rt = check_reference(d, hidden=True)
+    vis = pools_doc()["pools"]
+    hidden_ids = {c["image"] for c in rn["cases"]} | {c["image"] for c in rt["cases"]}
+    vis_ids = {e["id"] for k in ("cls_visible", "det_visible") for e in vis[k]}
+    assert not hidden_ids & vis_ids
+    for i in d["reference_images"]:  # the selected PNGs were copied next to the hidden JSON
+        assert os.path.isfile(os.path.join(hidden["out"], i["file"]))

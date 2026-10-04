@@ -76,3 +76,26 @@ Vision goldens, part A (WP4.1), output `<dev>/goldens/vision/vision_goldens.json
   models with 10 queries and labels w/x/y/z; the two importer tiny models are copied into `<models-out>/import_test`).
   `root` in the JSON is the absolute `--out-dir`, so the JSON bytes depend on that path (rerun into the same path: identical).
 - No network. About 15 s. Tests: `tests/test_vision_goldens.py` (the hidden variant is run into a temp dir).
+
+Reference photos and goldens, part B (WP4.2, C31):
+
+- `fetch_test_images.py` reads `data/test_images.json` (schema `pipelines-test-images/1`, committed, metadata only: four pools
+  `cls_visible` / `cls_hidden` / `det_visible` / `det_hidden`, each entry with id, Commons title, pinned upload.wikimedia.org
+  URL, licence, author and sha256). Only CC0 and Public Domain files are allowed; any other licence string is refused.
+  It downloads into `<dev>/cache/test_images/` (cached files with a matching sha256 are not downloaded again), verifies the
+  sha256 (mismatch = error) and writes the canonical 8-bit RGB PNGs to `<dev>/goldens/vision/reference_images/<id>.png`
+  (no EXIF transpose; thumbnail to at most 1024 px). `--pools` limits the pools. `--discover [--kinds cls,det]` rebuilds
+  pools from the Commons API (search restricted to the CC-Zero / Public domain categories, licence from `extmetadata`,
+  1024-px thumbnails, fixed shuffle, files split alternately into the visible and hidden pool, never in two pools); it
+  overwrites the pinned JSON, so run it only to refresh the candidates. Network: Commons API and upload.wikimedia.org only, with a
+  descriptive User-Agent and 0.6 s between requests. Images are never committed.
+- `make_vision_goldens.py` now also adds `reference_images`, `reference_models` (resnet-50 with `scores` softmax float64,
+  `index`, `top_margin`; rtdetr_r18vd with `detections` from the C29 decode and `hf_detections` from
+  `post_process_object_detection(threshold=0.5)`) and `reference_generator`. Reference = PyTorch fp32 from the offline HF cache at the
+  pinned revision (`HF_HUB_OFFLINE`), input = the HF slow processor on the PNG; onnxruntime CPU on the same tensor is the
+  cross-check. Per pool it takes the first candidates that pass the selection rules (20 classification, 10 detection):
+  top margin >= 0.05 and equal ORT argmax; for detection >= 1 detection, no torch score in [0.48, 0.52], no same-class pair
+  with IoU in [0.65, 0.75]. A candidate whose ORT output differs from torch by more than 1e-3 (logits, classification and
+  detection) or 1e-4 (detection boxes) is skipped with that reason (C31 says fail; the script ends with `NEEDS:` when a pool
+  cannot be filled). Every skipped candidate is listed in `skipped` with its reason. `--reference-images` and `--test-images`
+  override the PNG folder and the pools file. The hidden variant takes the `*_hidden` pools and copies the selected PNGs next to its JSON.

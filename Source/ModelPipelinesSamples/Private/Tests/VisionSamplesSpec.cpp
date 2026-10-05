@@ -573,7 +573,7 @@ namespace VisionSamplesSpecPrivate
 	 * The photo is upright and unstretched on the board (Place fits it that way); what is not known is whether the engine plane's UVs run
 	 * mirrored, so the four flips (none, left-right, top-bottom, both; NO u/v swap, a swap would be a stretched photo) are the only
 	 * hypotheses. The golden box (normalised in the photo) is mapped through the board into the view; the detected box centre must be within
-	 * 0.12 of it for the best flip, and the box's pixel aspect (w/h) must match the golden box's aspect on the board within 25 %, so a capture
+	 * 0.05 of it for the best flip, and the box's pixel aspect (w/h) must match the golden box's aspect on the board within 25 %, so a capture
 	 * that was squashed, or a sample that swapped x/y, fails. Reference box: the first golden detection whose label was detected.
 	 */
 	static bool CheckDetectionPosition(const AModelPipelinesDetectionSample* Sample, const FGoldDetCase& Gold, FString& Seen)
@@ -617,9 +617,9 @@ namespace VisionSamplesSpecPrivate
 		const double GotH = FMath::Max(1e-6, (double)Best->Box.GetSize().Y);
 		const double GotAspect = (GotW * Fit.VisW) / (GotH * Fit.VisH);
 		const double Ratio = GotAspect / WantAspect;
-		const bool bPos = BestDist <= 0.12;
+		const bool bPos = BestDist <= 0.05;
 		const bool bAspect = Ratio >= 0.75 && Ratio <= 1.25;
-		Seen += FString::Printf(TEXT(" | '%s' centre (%.3f, %.3f) vs golden-in-view (%.3f, %.3f) flip %d: distance %.3f (max 0.12)%s; box aspect %.3f vs golden-on-board %.3f, ratio %.2f (0.75..1.25)%s"),
+		Seen += FString::Printf(TEXT(" | '%s' centre (%.3f, %.3f) vs golden-in-view (%.3f, %.3f) flip %d: distance %.3f (max 0.05)%s; box aspect %.3f vs golden-on-board %.3f, ratio %.2f (0.75..1.25)%s"),
 			*Ref->Label, Got.X, Got.Y, BestWant.X, BestWant.Y, BestFlip, BestDist, bPos ? TEXT("") : TEXT(" FAILED"), GotAspect, WantAspect, Ratio, bAspect ? TEXT("") : TEXT(" FAILED"));
 		return bPos && bAspect;
 	}
@@ -661,8 +661,9 @@ void FVisionSamplesSpec::Define()
 
 		It("MaintainYFov16x9", [this, Near]()
 		{
-			// A scene capture's FOV is horizontal, the player camera's FOV 90 on 16:9 is vertical (engine default) -> 2*atan(tan 45 * 16/9) = 121.28.
-			// Returning 90 here is the F1 bug: the capture shows only the middle 56 % and boxes come out 1.78x too big.
+			// CaptureHorizontalFov is the LEGACY formula (r.UseLegacyMaintainYFOVViewMatrix): it treats the camera FOV as vertical -> 2*atan(tan 45 * 16/9) = 121.28.
+			// The real capture FOV comes from the projection matrix (ULocalPlayer::GetProjectionData); this formula is only the legacy-cvar fallback.
+			// Returning 90 from this function is wrong for the legacy case: the capture would show only the middle 56 % and boxes come out 1.78x too big.
 			Near(TEXT("90 MaintainYFOV 1920x1080"), CaptureHorizontalFov(90.f, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080)), 121.28f);
 		});
 
@@ -729,6 +730,204 @@ void FVisionSamplesSpec::Define()
 			}
 			TestTrue(*FString::Printf(TEXT("HFOV strictly increases with width for FOV 60, height 1080 (width:HFOV) %s"), *Seen), bOk);
 			TestTrue(TEXT("and stays within [1, 170]"), Prev <= 170.f && Prev >= 1.f);
+		});
+	});
+
+	// ======================================================================================================
+	Describe("FovFallback", [this]()
+	{
+		using UE::ModelPipelines::Samples::FallbackCaptureFov;
+		auto Near = [this](const TCHAR* What, float Got, float Want)
+		{
+			TestTrue(*FString::Printf(TEXT("%s: got %.4f deg, expected %.4f deg (tolerance 0.01, off by %.4f)"), What, Got, Want, FMath::Abs(Got - Want)), FMath::IsNearlyEqual(Got, Want, 0.01f));
+		};
+		const float NaN = FMath::Sqrt(-1.f);
+		volatile float Big = TNumericLimits<float>::Max(); const float Inf = Big * Big;   // +inf at run time (no Infinity() in TNumericLimits)
+
+		It("ModernCvarOffReturnsCameraFov", [this, Near]()
+		{
+			// Since 5.7 the view-info FOV is already horizontal: without the legacy cvar the camera FOV must come back unchanged.
+			// The old fallback widened 90 on 16:9 to 121.28 (the F-5.5b bug).
+			Near(TEXT("90 MaintainYFOV 1920x1080 legacy=false"), FallbackCaptureFov(90.f, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 90.f);
+			// The view size and the constraint are irrelevant when the cvar is off: portrait / MajorAxis / MaintainX / 0x0 all give 75.
+			Near(TEXT("75 MaintainYFOV 1080x1920 legacy=false"), FallbackCaptureFov(75.f, AspectRatio_MaintainYFOV, FIntPoint(1080, 1920), false), 75.f);
+			Near(TEXT("75 MajorAxisFOV 1080x1920 legacy=false"), FallbackCaptureFov(75.f, AspectRatio_MajorAxisFOV, FIntPoint(1080, 1920), false), 75.f);
+			Near(TEXT("75 MaintainXFOV 1920x1080 legacy=false"), FallbackCaptureFov(75.f, AspectRatio_MaintainXFOV, FIntPoint(1920, 1080), false), 75.f);
+			Near(TEXT("75 MaintainYFOV 0x0 legacy=false"), FallbackCaptureFov(75.f, AspectRatio_MaintainYFOV, FIntPoint(0, 0), false), 75.f);
+		});
+
+		It("LegacyCvarOnUsesTheLegacyFormula", [this, Near]()
+		{
+			// legacy=true delegates to CaptureHorizontalFov: 90 MaintainY 16:9 -> 121.28, portrait -> 58.72, MaintainX -> unchanged.
+			// A fallback that ignored the flag would return 90 for the first one.
+			Near(TEXT("90 MaintainYFOV 1920x1080 legacy=true"), FallbackCaptureFov(90.f, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), true), 121.28f);
+			Near(TEXT("90 MaintainYFOV 1080x1920 legacy=true"), FallbackCaptureFov(90.f, AspectRatio_MaintainYFOV, FIntPoint(1080, 1920), true), 58.72f);
+			Near(TEXT("90 MaintainXFOV 1920x1080 legacy=true"), FallbackCaptureFov(90.f, AspectRatio_MaintainXFOV, FIntPoint(1920, 1080), true), 90.f);
+			Near(TEXT("90 MajorAxisFOV 1080x1920 legacy=true"), FallbackCaptureFov(90.f, AspectRatio_MajorAxisFOV, FIntPoint(1080, 1920), true), 58.72f);
+			// Zero view size with the cvar on: no widening possible, the camera FOV comes back.
+			Near(TEXT("90 MaintainYFOV 0x0 legacy=true"), FallbackCaptureFov(90.f, AspectRatio_MaintainYFOV, FIntPoint(0, 0), true), 90.f);
+		});
+
+		It("NonFiniteFovFallsBackTo90", [this, Near, NaN, Inf]()
+		{
+			// NaN or infinity must never reach the capture component: 90 instead. MaintainX keeps the legacy path an identity, so 90 is unambiguous.
+			Near(TEXT("NaN MaintainYFOV 1920x1080 legacy=false"), FallbackCaptureFov(NaN, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 90.f);
+			Near(TEXT("+inf MaintainYFOV 1920x1080 legacy=false"), FallbackCaptureFov(Inf, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 90.f);
+			Near(TEXT("-inf MaintainYFOV 1920x1080 legacy=false"), FallbackCaptureFov(-Inf, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 90.f);
+			Near(TEXT("NaN MaintainXFOV 1920x1080 legacy=true"), FallbackCaptureFov(NaN, AspectRatio_MaintainXFOV, FIntPoint(1920, 1080), true), 90.f);
+		});
+
+		It("ClampedTo1And170", [this, Near]()
+		{
+			// 200 -> 170, 0.5 -> 1 (a missing clamp hands the capture an invalid projection); negative and zero go to 1; the bounds themselves stay.
+			Near(TEXT("200 MaintainYFOV legacy=false"), FallbackCaptureFov(200.f, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 170.f);
+			Near(TEXT("0.5 MaintainYFOV legacy=false"), FallbackCaptureFov(0.5f, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 1.f);
+			Near(TEXT("-5 MaintainYFOV legacy=false"), FallbackCaptureFov(-5.f, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 1.f);
+			Near(TEXT("0 MaintainYFOV legacy=false"), FallbackCaptureFov(0.f, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 1.f);
+			Near(TEXT("170 MaintainYFOV legacy=false"), FallbackCaptureFov(170.f, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 170.f);
+			Near(TEXT("1 MaintainYFOV legacy=false"), FallbackCaptureFov(1.f, AspectRatio_MaintainYFOV, FIntPoint(1920, 1080), false), 1.f);
+			// The clamp also applies after the legacy widening (170 MaintainY on 3840x1080 is ~177 unclamped).
+			Near(TEXT("170 MaintainYFOV 3840x1080 legacy=true"), FallbackCaptureFov(170.f, AspectRatio_MaintainYFOV, FIntPoint(3840, 1080), true), 170.f);
+		});
+	});
+
+	// ======================================================================================================
+	Describe("ViewRect", [this]()
+	{
+		using UE::ModelPipelines::Samples::CaptureSizeForView;
+		using UE::ModelPipelines::Samples::NeedsNewCaptureTarget;
+		using UE::ModelPipelines::Samples::MapBoxToOverlay;
+
+		auto SizeIs = [this](const TCHAR* What, FIntPoint Got, FIntPoint Want)
+		{
+			TestTrue(*FString::Printf(TEXT("%s: got %dx%d, expected %dx%d"), What, Got.X, Got.Y, Want.X, Want.Y), Got == Want);
+		};
+		auto Needs = [this](const TCHAR* What, FIntPoint Current, const FIntRect& View, bool bWant)
+		{
+			const bool bGot = NeedsNewCaptureTarget(Current, View);
+			TestTrue(*FString::Printf(TEXT("%s: current %dx%d, view rect (%d,%d)-(%d,%d): got %s, expected %s"), What, Current.X, Current.Y,
+				View.Min.X, View.Min.Y, View.Max.X, View.Max.Y, bGot ? TEXT("true") : TEXT("false"), bWant ? TEXT("true") : TEXT("false")), bGot == bWant);
+		};
+		auto BoxIs = [this](const TCHAR* What, const FBox2D& Got, FVector2D WantMin, FVector2D WantMax)
+		{
+			const bool bOk = FMath::IsNearlyEqual(Got.Min.X, (double)WantMin.X, 0.01) && FMath::IsNearlyEqual(Got.Min.Y, (double)WantMin.Y, 0.01)
+				&& FMath::IsNearlyEqual(Got.Max.X, (double)WantMax.X, 0.01) && FMath::IsNearlyEqual(Got.Max.Y, (double)WantMax.Y, 0.01);
+			TestTrue(*FString::Printf(TEXT("%s: got (%.3f,%.3f)-(%.3f,%.3f), expected (%.3f,%.3f)-(%.3f,%.3f) (tolerance 0.01)"), What,
+				Got.Min.X, Got.Min.Y, Got.Max.X, Got.Max.Y, WantMin.X, WantMin.Y, WantMax.X, WantMax.Y), bOk);
+		};
+
+		It("CaptureSizeFollowsTheViewAspect", [this, SizeIs]()
+		{
+			// Full 16:9 viewport -> 960x540; the split-screen half (960x1080) must give 960x1080: sizing from a fixed 16:9 gives 540 here.
+			SizeIs(TEXT("960, rect 0,0-1920,1080"), CaptureSizeForView(960, FIntRect(0, 0, 1920, 1080)), FIntPoint(960, 540));
+			SizeIs(TEXT("960, split half 0,0-960,1080"), CaptureSizeForView(960, FIntRect(0, 0, 960, 1080)), FIntPoint(960, 1080));
+			// Portrait 1080x1920: 960 / 0.5625 = 1706.67 -> rounds to 1707 (truncation would give 1706).
+			SizeIs(TEXT("960, portrait 0,0-1080,1920"), CaptureSizeForView(960, FIntRect(0, 0, 1080, 1920)), FIntPoint(960, 1707));
+			// Only the size of the rect counts, not where it sits: an offset rect and a negative-origin rect of 960x540 both give 960x540.
+			// A version using Max.X / Max.Y as the size would give 960x(960/(1060/590)) = 960x534.
+			SizeIs(TEXT("960, offset rect 100,50-1060,590"), CaptureSizeForView(960, FIntRect(100, 50, 1060, 590)), FIntPoint(960, 540));
+			SizeIs(TEXT("960, negative-origin rect -960,-540-0,0"), CaptureSizeForView(960, FIntRect(-960, -540, 0, 0)), FIntPoint(960, 540));
+			// The right half of a split screen (Min.X = 960): same size as the left half.
+			SizeIs(TEXT("960, right half 960,0-1920,1080"), CaptureSizeForView(960, FIntRect(960, 0, 1920, 1080)), FIntPoint(960, 1080));
+		});
+
+		It("CaptureSizeEmptyRectUses16x9", [this, SizeIs]()
+		{
+			// An empty rect (no viewport yet) must not divide by zero: 16:9. Width or height <= 0 both count, and an inverted rect too.
+			SizeIs(TEXT("960, rect 0,0-0,0"), CaptureSizeForView(960, FIntRect(0, 0, 0, 0)), FIntPoint(960, 540));
+			SizeIs(TEXT("960, zero width 0,0-0,1080"), CaptureSizeForView(960, FIntRect(0, 0, 0, 1080)), FIntPoint(960, 540));
+			SizeIs(TEXT("960, zero height 0,0-1920,0"), CaptureSizeForView(960, FIntRect(0, 0, 1920, 0)), FIntPoint(960, 540));
+			SizeIs(TEXT("960, inverted 100,100-50,50"), CaptureSizeForView(960, FIntRect(100, 100, 50, 50)), FIntPoint(960, 540));
+		});
+
+		It("CaptureSizeClamps", [this, SizeIs]()
+		{
+			// Width clamp to [16, 4096]: 10 -> 16 (so 16x9), 0 and negative -> 16, 99999 on a 1x4000 sliver -> 4096 wide and 4096 high (both clamps).
+			SizeIs(TEXT("10, rect 0,0-1920,1080"), CaptureSizeForView(10, FIntRect(0, 0, 1920, 1080)), FIntPoint(16, 9));
+			SizeIs(TEXT("0, rect 0,0-1920,1080"), CaptureSizeForView(0, FIntRect(0, 0, 1920, 1080)), FIntPoint(16, 9));
+			SizeIs(TEXT("-100, rect 0,0-1920,1080"), CaptureSizeForView(-100, FIntRect(0, 0, 1920, 1080)), FIntPoint(16, 9));
+			SizeIs(TEXT("99999, rect 0,0-1,4000"), CaptureSizeForView(99999, FIntRect(0, 0, 1, 4000)), FIntPoint(4096, 4096));
+			// The upper width bound keeps 16:9 (4096 -> 2304); a clamp that cut Y only would break the aspect.
+			SizeIs(TEXT("4096, rect 0,0-1920,1080"), CaptureSizeForView(4096, FIntRect(0, 0, 1920, 1080)), FIntPoint(4096, 2304));
+			// Height clamp to >= 1: 16 / (4000/1) = 0.004 -> 0 rounded, must be 1.
+			SizeIs(TEXT("16, rect 0,0-4000,1"), CaptureSizeForView(16, FIntRect(0, 0, 4000, 1)), FIntPoint(16, 1));
+		});
+
+		It("NeedsNewTargetWorkedExamples", [this, Needs]()
+		{
+			// Same aspect: keep. Split screen half (aspect 0.89 vs 1.78): recreate. Empty rect: keep what we have. Zero current size: create.
+			Needs(TEXT("same aspect"), FIntPoint(960, 540), FIntRect(0, 0, 1920, 1080), false);
+			Needs(TEXT("split half"), FIntPoint(960, 540), FIntRect(0, 0, 960, 1080), true);
+			Needs(TEXT("empty rect"), FIntPoint(960, 540), FIntRect(0, 0, 0, 0), false);
+			Needs(TEXT("zero current"), FIntPoint(0, 0), FIntRect(0, 0, 1920, 1080), true);
+		});
+
+		It("NeedsNewTargetOnePercentBoundary", [this, Needs]()
+		{
+			// Square current target; the view's aspect differs by 0.5 % (keep) or 2 % (recreate), in both directions. A threshold of 0 would recreate
+			// on every 1-pixel jitter during a window drag; a threshold of 5 % would keep the 2 % case.
+			Needs(TEXT("0.5 % wider"), FIntPoint(1000, 1000), FIntRect(0, 0, 1005, 1000), false);
+			Needs(TEXT("0.5 % narrower"), FIntPoint(1000, 1000), FIntRect(0, 0, 995, 1000), false);
+			Needs(TEXT("2 % wider"), FIntPoint(1000, 1000), FIntRect(0, 0, 1020, 1000), true);
+			Needs(TEXT("2 % narrower"), FIntPoint(1000, 1000), FIntRect(0, 0, 980, 1000), true);
+			// Just inside (0.9 %) and just outside (1.1 %) the 1 % limit: 1000x1009 -> view aspect 0.9911 (0.9 % off), 1000x1011 -> 0.9891 (1.1 % off).
+			Needs(TEXT("0.9 % taller view"), FIntPoint(1000, 1000), FIntRect(0, 0, 1000, 1009), false);
+			Needs(TEXT("1.1 % taller view"), FIntPoint(1000, 1000), FIntRect(0, 0, 1000, 1011), true);
+		});
+
+		It("NeedsNewTargetIgnoresRectPositionAndHandlesEdges", [this, Needs]()
+		{
+			// Only width/height matter: a 960x540 rect at an offset or negative origin matches a 960x540 target (Max/Min mix-ups would flag it).
+			Needs(TEXT("offset rect same aspect"), FIntPoint(960, 540), FIntRect(500, 300, 1460, 840), false);
+			Needs(TEXT("negative-origin rect same aspect"), FIntPoint(960, 540), FIntRect(-960, -540, 0, 0), false);
+			// Portrait target and portrait view match; landscape target vs portrait view does not.
+			Needs(TEXT("portrait/portrait"), FIntPoint(540, 960), FIntRect(0, 0, 1080, 1920), false);
+			Needs(TEXT("landscape target, portrait view"), FIntPoint(960, 540), FIntRect(0, 0, 1080, 1920), true);
+			// A zero in either component of the current size forces a new target for a non-empty rect.
+			Needs(TEXT("current 960x0"), FIntPoint(960, 0), FIntRect(0, 0, 1920, 1080), true);
+			Needs(TEXT("current 0x540"), FIntPoint(0, 540), FIntRect(0, 0, 1920, 1080), true);
+			// Empty rects keep the target, even with a zero current size, zero width/height, or an inverted rect.
+			Needs(TEXT("empty rect, zero current"), FIntPoint(0, 0), FIntRect(0, 0, 0, 0), false);
+			Needs(TEXT("zero-width rect"), FIntPoint(960, 540), FIntRect(0, 0, 0, 1080), false);
+			Needs(TEXT("inverted rect"), FIntPoint(960, 540), FIntRect(100, 100, 50, 50), false);
+		});
+
+		It("MapBoxWorkedExamples", [this, BoxIs]()
+		{
+			// Right half of the viewport: the full capture box covers the right half of the widget (640..1280 of 1280), full height.
+			BoxIs(TEXT("full box, right half"), MapBoxToOverlay(FBox2D(FVector2D(0, 0), FVector2D(1, 1)), FIntRect(960, 0, 1920, 1080), FIntPoint(1920, 1080), FVector2D(1280, 720)),
+				FVector2D(640, 0), FVector2D(1280, 720));
+			// Empty rect: the box maps onto the whole widget ((0.25,0.5)-(0.5,1) of 100x50).
+			BoxIs(TEXT("empty rect"), MapBoxToOverlay(FBox2D(FVector2D(0.25, 0.5), FVector2D(0.5, 1)), FIntRect(0, 0, 0, 0), FIntPoint(1920, 1080), FVector2D(100, 50)),
+				FVector2D(25, 25), FVector2D(50, 50));
+			// Box outside 0..1 is clamped to the view rect: {-1,-1}-{2,2} on the right half gives exactly the right half, not 960 px beyond it.
+			BoxIs(TEXT("oversize box clamped"), MapBoxToOverlay(FBox2D(FVector2D(-1, -1), FVector2D(2, 2)), FIntRect(960, 0, 1920, 1080), FIntPoint(1920, 1080), FVector2D(1280, 720)),
+				FVector2D(640, 0), FVector2D(1280, 720));
+			// Viewport with a zero component: whole widget.
+			BoxIs(TEXT("viewport 0x0"), MapBoxToOverlay(FBox2D(FVector2D(0.25, 0.5), FVector2D(0.5, 1)), FIntRect(960, 0, 1920, 1080), FIntPoint(0, 0), FVector2D(100, 50)),
+				FVector2D(25, 25), FVector2D(50, 50));
+		});
+
+		It("MapBoxOffsetRectAndEdges", [this, BoxIs]()
+		{
+			// A 200x100 view rect at (100,50) in a 400x200 viewport shown by an 800x400 widget (widget scale 2, differs from the viewport):
+			// full box -> (100/400*800, 50/200*400)-(300/400*800, 150/200*400) = (200,100)-(600,300). Ignoring Min.X/Y would give (0,0)-(400,200).
+			BoxIs(TEXT("offset rect, full box"), MapBoxToOverlay(FBox2D(FVector2D(0, 0), FVector2D(1, 1)), FIntRect(100, 50, 300, 150), FIntPoint(400, 200), FVector2D(800, 400)),
+				FVector2D(200, 100), FVector2D(600, 300));
+			// Inner box (0.25,0.5)-(0.75,1): x = (100+50)/400*800 = 300 .. (100+150)/400*800 = 500; y = (50+50)/200*400 = 200 .. 300.
+			BoxIs(TEXT("offset rect, inner box"), MapBoxToOverlay(FBox2D(FVector2D(0.25, 0.5), FVector2D(0.75, 1)), FIntRect(100, 50, 300, 150), FIntPoint(400, 200), FVector2D(800, 400)),
+				FVector2D(300, 200), FVector2D(500, 300));
+			// Partly outside: (-0.5,0.2)-(0.5,1.5) clamps to (0,0.2)-(0.5,1) on the whole 1920x1080 view in a 192x108 widget -> (0,21.6)-(96,108).
+			BoxIs(TEXT("partly outside, whole viewport"), MapBoxToOverlay(FBox2D(FVector2D(-0.5, 0.2), FVector2D(0.5, 1.5)), FIntRect(0, 0, 1920, 1080), FIntPoint(1920, 1080), FVector2D(192, 108)),
+				FVector2D(0, 21.6), FVector2D(96, 108));
+			// Left half of a split screen (Min = 0): full box -> left half of the widget, full height.
+			BoxIs(TEXT("left half"), MapBoxToOverlay(FBox2D(FVector2D(0, 0), FVector2D(1, 1)), FIntRect(0, 0, 960, 1080), FIntPoint(1920, 1080), FVector2D(1280, 720)),
+				FVector2D(0, 0), FVector2D(640, 720));
+			// Zero height viewport, or zero-height rect: whole widget as well.
+			BoxIs(TEXT("viewport 1920x0"), MapBoxToOverlay(FBox2D(FVector2D(0.25, 0.5), FVector2D(0.5, 1)), FIntRect(960, 0, 1920, 1080), FIntPoint(1920, 0), FVector2D(100, 50)),
+				FVector2D(25, 25), FVector2D(50, 50));
+			BoxIs(TEXT("zero-height rect"), MapBoxToOverlay(FBox2D(FVector2D(0.25, 0.5), FVector2D(0.5, 1)), FIntRect(0, 0, 1920, 0), FIntPoint(1920, 1080), FVector2D(100, 50)),
+				FVector2D(25, 25), FVector2D(50, 50));
 		});
 	});
 
@@ -817,8 +1016,8 @@ void FVisionSamplesSpec::Define()
 		LatentIt("DetectionCaptureFovIsHorizontalFovWithoutViewport", LatentLimit, [this](const FDoneDelegate& Done)
 		{
 			// No viewport and no local player in the test world: the sample's own default is the camera FOV 90 on a view of unknown size, so the capture's
-			// FOVAngle must be CaptureHorizontalFov(90, MaintainYFOV, 0x0) = 90 (the capture component's FOV, horizontal). Guards F1: a sample that
-			// stuffed a vertical FOV into the capture, or applied the 960x540 aspect to a camera it does not have (121.28), fails here.
+			// FOVAngle must be 90 (CaptureHorizontalFov / the fallback with a 0x0 view returns the camera FOV; the capture component's FOV is horizontal).
+			// Guards F1: a sample that applied the legacy 960x540 aspect widening (121.28) to a camera it does not have fails here.
 			Fix = NewFix(*this, false, true);
 			if (!Fix.IsValid()) { Done.ExecuteIfBound(); return; }
 			const TSharedRef<FFix> F = Fix.ToSharedRef();
@@ -1198,7 +1397,7 @@ void FVisionSamplesSpec::Define()
 		{
 			// The photo keeps its aspect inside the 960 x 540 view (black bars), DetectNow() captures and runs RT-DETR. At least one
 			// detection must carry a label the Python reference found in that photo with score >= ScoreThreshold, every box lies inside
-			// [0,1], and the box of the first detected golden label sits where the golden box maps into the view (centre within 0.12) with the
+			// [0,1], and the box of the first detected golden label sits where the golden box maps into the view (centre within 0.05) with the
 			// golden aspect (25 %). The position check is part of the roll match and is never skipped: a sample that squashed the capture,
 			// swapped x/y or mapped boxes to the wrong frame fails it at every roll.
 			if (SkipWithoutRhi(*this)) { Done.ExecuteIfBound(); return; }

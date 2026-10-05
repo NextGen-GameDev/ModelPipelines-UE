@@ -4,8 +4,12 @@
 
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "SceneView.h"
+#include "Slate/SceneViewport.h"
 #include "ObjectDetectionPipeline.h"
 #include "UObject/WeakObjectPtrTemplates.h"
 #include "VisionPipelineLibrary.h"
@@ -69,22 +73,13 @@ void AModelPipelinesDetectionSample::Tick(float DeltaSeconds)
 
 void AModelPipelinesDetectionSample::BeginPlay()
 {
-	// Same aspect as the view, so normalized boxes map straight onto the viewport. 16:9 when there is no viewport (960 x 540).
-	// This is the aspect CopyPlayerCamera uses for the horizontal FOV (the game viewport size); a later window resize is not followed.
-	double Aspect = 16.0 / 9.0;
-	UWorld* World = GetWorld();
-	if (UGameViewportClient* Viewport = World ? World->GetGameViewport() : nullptr)
-	{
-		FVector2D ViewportSize = FVector2D::ZeroVector;
-		Viewport->GetViewportSize(ViewportSize);
-		if (ViewportSize.X > 0.0 && ViewportSize.Y > 0.0)
-		{
-			Aspect = ViewportSize.X / ViewportSize.Y;
-		}
-	}
-	const int32 Width = FMath::Clamp(CaptureWidth, 16, 4096);
-	const int32 Height = FMath::Clamp(FMath::RoundToInt32(Width / Aspect), 1, 4096);
-	RenderTarget = UE::ModelPipelines::Samples::CreateSampleCaptureTarget(this, Width, Height);
+	// Same aspect as the player's view rect, so normalized boxes map straight onto that rect. Fallbacks: the whole viewport, then
+	// 16:9 without a viewport (960 x 540). Later aspect changes (window resize, split screen) are followed in StartDetectCall.
+	FIntRect ViewRect(0, 0, 0, 0);
+	FIntPoint ViewportSize = FIntPoint::ZeroValue;
+	GetPlayerView(ViewRect, ViewportSize);
+	const FIntPoint Size = UE::ModelPipelines::Samples::CaptureSizeForView(CaptureWidth, ViewRect);
+	RenderTarget = UE::ModelPipelines::Samples::CreateSampleCaptureTarget(this, Size.X, Size.Y);
 	if (SceneCapture)
 	{
 		SceneCapture->TextureTarget = RenderTarget;
@@ -102,11 +97,64 @@ FPipelineResult AModelPipelinesDetectionSample::CreatePipeline(UPipelineModelPac
 
 void AModelPipelinesDetectionSample::FollowPlayerCamera()
 {
-	// Same location, rotation and view as the player camera: CopyPlayerCamera sets the capture's FOVAngle to the view's HORIZONTAL
-	// FOV (the camera FOV is vertical under the default MaintainYFOV constraint), and the render target has the viewport's aspect
-	// (BeginPlay), so the capture frames exactly the view. Without a player controller (tests) the actor keeps its own transform
-	// and the capture its own FOV (90).
+	// Same location, rotation and view as the player camera: CopyPlayerCamera sets the capture's FOVAngle to the view's horizontal FOV,
+	// read from the player's projection matrix (fallback: the camera FOV, widened only under the legacy MaintainYFOV cvar), and the
+	// render target has the aspect of the player's view rect (BeginPlay / UpdateCaptureTargetForView), so the capture frames exactly
+	// the view. Without a player controller (tests) the actor keeps its own transform and the capture its own FOV (90).
 	UE::ModelPipelines::Samples::CopyPlayerCamera(this, SceneCapture);
+}
+
+bool AModelPipelinesDetectionSample::GetPlayerView(FIntRect& OutViewRect, FIntPoint& OutViewportSize) const
+{
+	UWorld* World = GetWorld();
+	UGameViewportClient* Client = World ? World->GetGameViewport() : nullptr;
+	FSceneViewport* Viewport = Client ? Client->GetGameViewport() : nullptr;
+	const FIntPoint Size = Viewport ? Viewport->GetSizeXY() : FIntPoint::ZeroValue;
+	if (Size.X <= 0 || Size.Y <= 0)
+	{
+		return false;
+	}
+	OutViewportSize = Size;
+	OutViewRect = FIntRect(FIntPoint::ZeroValue, Size);
+	// The player's constrained view rect (split screen, bConstrainAspectRatio); LocalPlayer.h:623 (5.8) / :613 (5.7), SceneView.h:98.
+	// It includes the viewport's initial position, so make it relative to the viewport (the overlay covers the viewport).
+	APlayerController* PC = World->GetFirstPlayerController();
+	ULocalPlayer* LocalPlayer = PC ? PC->GetLocalPlayer() : nullptr;
+	FSceneViewProjectionData Data;
+	if (LocalPlayer && LocalPlayer->GetProjectionData(Viewport, Data))
+	{
+		FIntRect Rect = Data.GetConstrainedViewRect();
+		const FIntPoint Offset = Viewport->GetInitialPositionXY();
+		Rect.Min -= Offset;
+		Rect.Max -= Offset;
+		if (Rect.Width() > 0 && Rect.Height() > 0)
+		{
+			OutViewRect = Rect;
+		}
+	}
+	return true;
+}
+
+void AModelPipelinesDetectionSample::UpdateCaptureTargetForView(const FIntRect& ViewRect)
+{
+	// Called only from StartDetectCall: the previous call has finished, so no in-flight call still reads the old target.
+	if (LastTargetCheckFrame == GFrameCounter)
+	{
+		return;
+	}
+	LastTargetCheckFrame = GFrameCounter;
+	const FIntPoint Current = RenderTarget ? FIntPoint(RenderTarget->SizeX, RenderTarget->SizeY) : FIntPoint::ZeroValue;
+	const FIntPoint Wanted = UE::ModelPipelines::Samples::CaptureSizeForView(CaptureWidth, ViewRect);
+	// The size check avoids recreating the same size again when rounding a tiny CaptureWidth alone exceeds the 1 % aspect limit.
+	if (!UE::ModelPipelines::Samples::NeedsNewCaptureTarget(Current, ViewRect) || Wanted == Current)
+	{
+		return;
+	}
+	RenderTarget = UE::ModelPipelines::Samples::CreateSampleCaptureTarget(this, Wanted.X, Wanted.Y);
+	if (SceneCapture)
+	{
+		SceneCapture->TextureTarget = RenderTarget;
+	}
 }
 
 void AModelPipelinesDetectionSample::StartDetectCall()
@@ -115,6 +163,14 @@ void AModelPipelinesDetectionSample::StartDetectCall()
 	{
 		FinishCallNextTick(FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("The detection sample has no pipeline or render target")));
 		return;
+	}
+	// The view this call captures: the render target follows its aspect (recreated here only, between calls), and the overlay
+	// draws this call's boxes inside it. Without a viewport (tests) the rect stays empty: 960 x 540, boxes over the whole overlay.
+	FIntRect ViewRect(0, 0, 0, 0);
+	FIntPoint ViewportSize = FIntPoint::ZeroValue;
+	if (GetPlayerView(ViewRect, ViewportSize))
+	{
+		UpdateCaptureTargetForView(ViewRect);
 	}
 	if (bFollowPlayerCamera)
 	{
@@ -130,7 +186,7 @@ void AModelPipelinesDetectionSample::StartDetectCall()
 	SceneCapture->CaptureScene();
 
 	// The callback runs on the game thread; the weak pointer skips it if the actor is gone (rule 4).
-	Pipeline->DetectAsync(RenderTarget, ScoreThreshold, [WeakThis = TWeakObjectPtr<AModelPipelinesDetectionSample>(this)](const FPipelineResult& Result, const TArray<FPipelineDetection>& Detections)
+	Pipeline->DetectAsync(RenderTarget, ScoreThreshold, [WeakThis = TWeakObjectPtr<AModelPipelinesDetectionSample>(this), ViewRect, ViewportSize](const FPipelineResult& Result, const TArray<FPipelineDetection>& Detections)
 	{
 		AModelPipelinesDetectionSample* Self = WeakThis.Get();
 		if (!Self || !Self->IsPlaying())
@@ -140,6 +196,8 @@ void AModelPipelinesDetectionSample::StartDetectCall()
 		// The boxes belong to the frame captured when this call started, not to the current one; they stay on screen until
 		// the next result. At 2 Hz they trail fast camera moves a little, which is fine for a sample.
 		Self->LastDetections = Result.bSuccess ? Detections : TArray<FPipelineDetection>();
+		Self->LastViewRect = ViewRect;
+		Self->LastViewportSize = ViewportSize;
 		Self->FinishCall(Result);
 	});
 }
@@ -163,7 +221,8 @@ FText AModelPipelinesDetectionSample::GetOverlayTitle() const
 
 TSharedRef<SWidget> AModelPipelinesDetectionSample::BuildOverlay()
 {
-	// The box layer fills the viewport (the capture has the view's aspect and FOV); the status panel sits on top, top-left.
+	// The box layer fills the viewport and draws inside the player's view rect (the capture has that rect's aspect and the view's FOV);
+	// the status panel sits on top, top-left.
 	return SNew(SOverlay)
 		+ SOverlay::Slot().HAlign(HAlign_Fill).VAlign(VAlign_Fill)
 		[
@@ -179,6 +238,6 @@ void AModelPipelinesDetectionSample::RefreshOverlay()
 {
 	if (BoxOverlay.IsValid())
 	{
-		BoxOverlay->SetDetections(LastDetections);
+		BoxOverlay->SetDetections(LastDetections, LastViewRect, LastViewportSize);
 	}
 }

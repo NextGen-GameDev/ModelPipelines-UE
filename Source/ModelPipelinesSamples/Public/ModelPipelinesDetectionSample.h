@@ -14,8 +14,9 @@ class USceneCaptureComponent2D;
 class UTextureRenderTarget2D;
 
 /**
- * Object detection sample: a scene capture with the viewport's aspect and the player view's horizontal FOV follows the camera; every
- * IntervalSeconds it runs the detector and the boxes are drawn over the view with "label 0.87". Model: rtdetr_r18vd.
+ * Object detection sample: a scene capture with the aspect of the player's view rect and the player view's horizontal FOV (read from
+ * the player's projection) follows the camera; every IntervalSeconds it runs the detector and the boxes are drawn over that view rect
+ * with "label 0.87". Model: rtdetr_r18vd.
  * Game input stays on.
  */
 UCLASS(Blueprintable)
@@ -30,7 +31,8 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Model Pipelines|Sample")
 	TObjectPtr<USceneCaptureComponent2D> SceneCapture;
 
-	/** Capture width; the height follows the viewport aspect (540 for 960 when there is no viewport). Set at BeginPlay. */
+	/** Capture width; the height follows the aspect of the player's view rect (540 for 960 when there is no viewport). Set at BeginPlay;
+	    the render target is recreated when the view's aspect changes (e.g. a window resize), never while a call is in flight. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Model Pipelines|Sample", meta = (ClampMin = "16", ClampMax = "4096"))
 	int32 CaptureWidth = 960;
 
@@ -42,7 +44,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Model Pipelines|Sample", meta = (ClampMin = "0.05"))
 	float IntervalSeconds = 0.5f;
 
-	/** Copy the player camera's location, rotation and horizontal view FOV every tick (without a player controller the actor's own transform is used). */
+	/** Copy the player camera's location, rotation and horizontal view FOV (from the player's projection; else the camera FOV) every tick
+	    (without a player controller the actor's own transform is used). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Model Pipelines|Sample")
 	bool bFollowPlayerCamera = true;
 
@@ -54,7 +57,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Model Pipelines|Sample")
 	TArray<FPipelineDetection> GetLastDetections() const;
 
-	/** The capture's render target (null before BeginPlay). */
+	/** The capture's render target (null before BeginPlay; a new object after the view's aspect changed). */
 	UFUNCTION(BlueprintPure, Category = "Model Pipelines|Sample")
 	UTextureRenderTarget2D* GetRenderTarget() const;
 
@@ -74,6 +77,13 @@ private:
 	void StartDetectCall();
 	void FollowPlayerCamera();
 
+	/** The player's view rect (relative to the viewport, from ULocalPlayer::GetProjectionData; else the whole viewport) and the
+	    viewport size. false without a game viewport (tests). */
+	bool GetPlayerView(FIntRect& OutViewRect, FIntPoint& OutViewportSize) const;
+
+	/** Recreates RenderTarget (and assigns it to the capture) when the view's aspect changed; at most once per frame, only between calls. */
+	void UpdateCaptureTargetForView(const FIntRect& ViewRect);
+
 	UPROPERTY(Transient)
 	TObjectPtr<UObjectDetectionPipeline> Pipeline;
 
@@ -81,6 +91,11 @@ private:
 	TObjectPtr<UTextureRenderTarget2D> RenderTarget;
 
 	TArray<FPipelineDetection> LastDetections;
+	/** What the call behind LastDetections captured (viewport pixels); empty = boxes over the whole overlay. */
+	FIntRect LastViewRect = FIntRect(0, 0, 0, 0);
+	FIntPoint LastViewportSize = FIntPoint::ZeroValue;
+	/** GFrameCounter of the last render-target check (at most one per frame). */
+	uint64 LastTargetCheckFrame = MAX_uint64;
 	float SecondsSinceLastCall = 0.f;
 
 	TSharedPtr<SSampleDetectionOverlay> BoxOverlay;

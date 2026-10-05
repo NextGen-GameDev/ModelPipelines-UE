@@ -11,9 +11,11 @@ void SSampleDetectionOverlay::Construct(const FArguments& InArgs)
 	SetVisibility(EVisibility::HitTestInvisible);
 }
 
-void SSampleDetectionOverlay::SetDetections(const TArray<FPipelineDetection>& InDetections)
+void SSampleDetectionOverlay::SetDetections(const TArray<FPipelineDetection>& InDetections, const FIntRect& InViewRect, FIntPoint InViewportSize)
 {
 	Detections = InDetections;
+	ViewRect = InViewRect;
+	ViewportSize = InViewportSize;
 	Invalidate(EInvalidateWidgetReason::Paint);
 }
 
@@ -37,11 +39,13 @@ int32 SSampleDetectionOverlay::OnPaint(const FPaintArgs& Args, const FGeometry& 
 	const FPaintGeometry Whole = AllottedGeometry.ToPaintGeometry();
 	for (const FPipelineDetection& D : Detections)
 	{
-		// Normalized box (Min = left/top, Max = right/bottom) times the widget size; the capture has the view's aspect and FOV.
-		const float X0 = FMath::Clamp((float)D.Box.Min.X, 0.f, 1.f) * Size.X;
-		const float Y0 = FMath::Clamp((float)D.Box.Min.Y, 0.f, 1.f) * Size.Y;
-		const float X1 = FMath::Clamp((float)D.Box.Max.X, 0.f, 1.f) * Size.X;
-		const float Y1 = FMath::Clamp((float)D.Box.Max.Y, 0.f, 1.f) * Size.Y;
+		// Normalized box (Min = left/top, Max = right/bottom) mapped into the view rect the capture showed (it has that rect's aspect
+		// and the view's FOV); the widget covers the whole viewport.
+		const FBox2D Mapped = UE::ModelPipelines::Samples::MapBoxToOverlay(D.Box, ViewRect, ViewportSize, FVector2D(Size));
+		const float X0 = (float)Mapped.Min.X;
+		const float Y0 = (float)Mapped.Min.Y;
+		const float X1 = (float)Mapped.Max.X;
+		const float Y1 = (float)Mapped.Max.Y;
 
 		TArray<FVector2f> Points;
 		Points.Reserve(5);

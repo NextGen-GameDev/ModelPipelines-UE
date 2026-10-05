@@ -43,7 +43,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Model Pipelines|Sample", meta = (ClampMin = "1"))
 	int32 TopK = 3;
 
-	/** Copy the player camera's location, rotation and horizontal view FOV every tick (without a player controller the actor's own transform is used). */
+	/** Copy the player camera's location, rotation and horizontal view FOV (from the player's projection; else the camera FOV) every tick
+	    (without a player controller the actor's own transform is used). The capture stays square: it classifies the centre of the view. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Model Pipelines|Sample")
 	bool bFollowPlayerCamera = true;
 

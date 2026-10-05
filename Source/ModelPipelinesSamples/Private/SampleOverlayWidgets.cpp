@@ -10,6 +10,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
+#include "HAL/IConsoleManager.h"
 #include "SceneView.h"
 #include "Slate/SceneViewport.h"
 #include "Styling/CoreStyle.h"
@@ -105,8 +106,9 @@ namespace UE::ModelPipelines::Samples
 	{
 		constexpr float MinFov = 1.f;
 		constexpr float MaxFov = 170.f;
-		// The camera FOV is horizontal when X is the constrained axis (MaintainXFOV, or MajorAxisFOV on a landscape/square view),
-		// and when the view size is unknown. Otherwise it is vertical: widen it by the view aspect X/Y.
+		// Legacy MaintainYFOV view matrix (cvar r.UseLegacyMaintainYFOVViewMatrix): the camera FOV is horizontal when X is the
+		// constrained axis (MaintainXFOV, or MajorAxisFOV on a landscape/square view), and when the view size is unknown. Otherwise
+		// it is vertical: widen it by the view aspect X/Y.
 		const bool bHorizontal = Constraint == AspectRatio_MaintainXFOV
 			|| (Constraint == AspectRatio_MajorAxisFOV && ViewSize.X >= ViewSize.Y)
 			|| ViewSize.X <= 0 || ViewSize.Y <= 0;
@@ -118,6 +120,68 @@ namespace UE::ModelPipelines::Samples
 		const double HalfV = FMath::DegreesToRadians(FMath::Clamp((double)CameraFovDeg, 0.001, 179.9) * 0.5);
 		const double HalfH = FMath::Atan(FMath::Tan(HalfV) * (double)ViewSize.X / (double)ViewSize.Y);
 		return FMath::Clamp((float)FMath::RadiansToDegrees(2.0 * HalfH), MinFov, MaxFov);
+	}
+
+	float FallbackCaptureFov(float CameraFovDeg, EAspectRatioAxisConstraint Constraint, FIntPoint ViewSize, bool bLegacyMaintainYFov)
+	{
+		if (!FMath::IsFinite(CameraFovDeg))
+		{
+			return 90.f;
+		}
+		if (bLegacyMaintainYFov)
+		{
+			// Legacy view matrix: the camera FOV is vertical under a Y constraint (CaptureHorizontalFov clamps too).
+			return CaptureHorizontalFov(CameraFovDeg, Constraint, ViewSize);
+		}
+		// 5.7/5.8 default: the view-info FOV is already horizontal (CameraStackTypes.cpp:326), whatever the constraint.
+		return FMath::Clamp(CameraFovDeg, 1.f, 170.f);
+	}
+
+	FIntPoint CaptureSizeForView(int32 CaptureWidth, const FIntRect& ViewRect)
+	{
+		const int32 W = ViewRect.Width();
+		const int32 H = ViewRect.Height();
+		const double Aspect = (W > 0 && H > 0) ? (double)W / (double)H : 16.0 / 9.0;
+		const int32 X = FMath::Clamp(CaptureWidth, 16, 4096);
+		// Clamp before rounding so an extreme sliver never overflows int32.
+		const int32 Y = FMath::Clamp(FMath::RoundToInt32(FMath::Clamp((double)X / Aspect, 1.0, 4096.0)), 1, 4096);
+		return FIntPoint(X, Y);
+	}
+
+	bool NeedsNewCaptureTarget(FIntPoint CurrentSize, const FIntRect& ViewRect)
+	{
+		const int32 W = ViewRect.Width();
+		const int32 H = ViewRect.Height();
+		if (W <= 0 || H <= 0)
+		{
+			return false;
+		}
+		if (CurrentSize.X <= 0 || CurrentSize.Y <= 0)
+		{
+			return true;
+		}
+		const double ViewAspect = (double)W / (double)H;
+		const double CurrentAspect = (double)CurrentSize.X / (double)CurrentSize.Y;
+		return FMath::Abs(CurrentAspect - ViewAspect) / ViewAspect > 0.01;
+	}
+
+	FBox2D MapBoxToOverlay(const FBox2D& NormalizedBox, const FIntRect& ViewRect, FIntPoint ViewportSize, FVector2D WidgetSize)
+	{
+		const double X0 = FMath::Clamp(NormalizedBox.Min.X, 0.0, 1.0);
+		const double Y0 = FMath::Clamp(NormalizedBox.Min.Y, 0.0, 1.0);
+		const double X1 = FMath::Clamp(NormalizedBox.Max.X, 0.0, 1.0);
+		const double Y1 = FMath::Clamp(NormalizedBox.Max.Y, 0.0, 1.0);
+		const int32 W = ViewRect.Width();
+		const int32 H = ViewRect.Height();
+		if (W <= 0 || H <= 0 || ViewportSize.X <= 0 || ViewportSize.Y <= 0)
+		{
+			return FBox2D(FVector2D(X0 * WidgetSize.X, Y0 * WidgetSize.Y), FVector2D(X1 * WidgetSize.X, Y1 * WidgetSize.Y));
+		}
+		const double ScaleX = WidgetSize.X / (double)ViewportSize.X;
+		const double ScaleY = WidgetSize.Y / (double)ViewportSize.Y;
+		auto MapX = [&](double N) { return ((double)ViewRect.Min.X + N * (double)W) * ScaleX; };
+		auto MapY = [&](double N) { return ((double)ViewRect.Min.Y + N * (double)H) * ScaleY; };
+		return FBox2D(FVector2D(MapX(X0), MapY(Y0)), FVector2D(MapX(X1), MapY(Y1)));
 	}
 
 	namespace
@@ -155,9 +219,10 @@ namespace UE::ModelPipelines::Samples
 		Actor->SetActorLocationAndRotation(Camera->GetCameraLocation(), Camera->GetCameraRotation());
 		if (Capture)
 		{
-			// A scene capture's FOVAngle is horizontal (SceneCaptureRendering.cpp, XAxisMultiplier = 1), but the camera FOV is applied
-			// per the local player's AspectRatioAxisConstraint (default MaintainYFOV). Convert to the view's horizontal FOV so the
-			// capture (same aspect as the viewport) frames exactly what the player sees. All read on the game thread.
+			// A scene capture's FOVAngle is horizontal (SceneCaptureRendering.cpp, XAxisMultiplier = 1). The player's horizontal FOV
+			// is read from its projection matrix first (covers the constraint, the camera's aspect and bConstrainAspectRatio). When
+			// that is unavailable, FallbackCaptureFov: the camera FOV as is (horizontal since 5.7), or the legacy MaintainYFOV widening
+			// when the cvar r.UseLegacyMaintainYFOVViewMatrix is on. All read on the game thread.
 			ULocalPlayer* LocalPlayer = PC->GetLocalPlayer();
 			UGameViewportClient* ViewportClient = World->GetGameViewport();
 			FSceneViewport* Viewport = ViewportClient ? ViewportClient->GetGameViewport() : nullptr;
@@ -166,7 +231,10 @@ namespace UE::ModelPipelines::Samples
 			{
 				const EAspectRatioAxisConstraint Constraint = LocalPlayer ? LocalPlayer->AspectRatioAxisConstraint.GetValue() : AspectRatio_MaintainYFOV;
 				const FIntPoint ViewSize = Viewport ? Viewport->GetSizeXY() : FIntPoint::ZeroValue;
-				Fov = CaptureHorizontalFov(Camera->GetFOVAngle(), Constraint, ViewSize);
+				// CameraStackTypes.cpp:14 (bool, default false); a missing cvar counts as off.
+				const IConsoleVariable* LegacyCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.UseLegacyMaintainYFOVViewMatrix"));
+				const bool bLegacy = LegacyCVar ? LegacyCVar->GetBool() : false;
+				Fov = FallbackCaptureFov(Camera->GetFOVAngle(), Constraint, ViewSize, bLegacy);
 			}
 			Capture->FOVAngle = Fov;
 		}

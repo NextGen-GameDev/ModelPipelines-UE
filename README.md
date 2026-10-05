@@ -18,6 +18,7 @@ Start at [Docs/README.md](Docs/README.md).
 - [Get and import models](Docs/ImportModel.md)
 - [Samples](Docs/Samples.md): four ready-to-play maps
 - [Blueprint nodes and C++ calls](Docs/Nodes.md)
+- [AI agent tools (MCP)](Docs/MCP.md): optional, UE 5.8 only
 - [Troubleshooting](Docs/Troubleshooting.md)
 - [Model licenses](Docs/ModelLicenses.md)
 

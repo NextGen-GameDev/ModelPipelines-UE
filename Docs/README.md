@@ -19,8 +19,9 @@ You do not need to know machine learning. You do need to know Blueprints.
 2. [Import a model](ImportModel.md): get the four sample models and import them.
 3. [Samples](Samples.md): open and play the four sample maps. Each page also shows the same flow as Blueprint nodes.
 4. [Nodes](Nodes.md): every Blueprint node, pin and result type, plus the C++ calls.
-5. [Troubleshooting](Troubleshooting.md): messages you may see and what to do.
-6. [Model licenses](ModelLicenses.md): licenses of the sample models and photos, and advice for your own models.
+5. [AI agent tools (MCP)](MCP.md): optional. Let an AI agent import, validate, benchmark and try models in the editor (UE 5.8 only).
+6. [Troubleshooting](Troubleshooting.md): messages you may see and what to do.
+7. [Model licenses](ModelLicenses.md): licenses of the sample models and photos, and advice for your own models.
 
 ## License
 

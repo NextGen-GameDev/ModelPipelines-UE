@@ -265,6 +265,15 @@ namespace PipelineMcpRunPrivate
 				{
 					const int32 W = Pkg->Preprocess.ImageWidth;
 					const int32 H = Pkg->Preprocess.ImageHeight;
+					// Cap the game-thread fill well below FPipelineImage::MaxSide (16384^2 = 1 GiB).
+					constexpr int32 MaxSyntheticSide = 4096;
+					if (W > MaxSyntheticSide || H > MaxSyntheticSide)
+					{
+						FailJob(FString::Printf(
+							TEXT("image size %dx%d is too large for a synthetic benchmark input (max %dx%d); pass image"),
+							W, H, MaxSyntheticSide, MaxSyntheticSide));
+						return;
+					}
 					Synthetic.Width = W;
 					Synthetic.Height = H;
 					if (W > 0 && H > 0 && W <= FPipelineImage::MaxSide && H <= FPipelineImage::MaxSide)

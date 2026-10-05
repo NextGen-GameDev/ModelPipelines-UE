@@ -4,7 +4,7 @@ Model Pipelines does not ship model files. You download the four sample models w
 
 ## Step 1: Get the models
 
-You need Python 3.11. Python 3.11 is tested. About 1 GB is downloaded, and the first run takes about 6 minutes.
+You need Python 3.11 or newer. Python 3.11 is tested, and 3.13 also worked in our check. About 1 GB is downloaded, and the first run takes about 6 minutes.
 
 This virtual environment is only for the download script. The editor runs import scripts (see the batch import section below) with its own Python (UE 5.8 ships 3.11.8), so do not `pip install` anything into the engine.
 
@@ -153,7 +153,7 @@ You can run the script two ways. First, turn on the Python plugin: **Edit > Plug
   "<UE>\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "<Project>.uproject" -ExecutePythonScript="<script.py>" -unattended -nosplash -RenderOffscreen
   ```
 
-  Replace `<UE>` with your engine folder, `<Project>` with the full path of your project, and `<script.py>` with your script path. The prints appear in the terminal and the log. Do not run this while the same project is open in the editor.
+  Replace `<UE>` with your engine folder, `<Project>` with the full path of your project, and `<script.py>` with your script path. With `-unattended` the prints do not appear in the terminal. They are written to the project log, `<Project folder>\Saved\Logs\<Project name>.log`, as lines that start with `LogPython:`. Open the log and search for `LogPython`. Do not run this while the same project is open in the editor.
 
   `-ExecutePythonScript` only works when the Python Editor Script Plugin is enabled in the project. If you enabled it in **Edit > Plugins**, the editor already added it to your `.uproject` file. If you never opened the project in the editor, add this entry by hand to the `"Plugins"` list in the `.uproject` file:
 
@@ -228,5 +228,14 @@ No problems found
 ```
 
 Any other output is a list of messages. Fix every error and run the check again.
+
+To read which task a package serves from Python, use its **Task** property:
+
+```python
+pkg = unreal.load_asset("/Game/Models/resnet-50")
+print(pkg.get_editor_property("task"))
+```
+
+This prints the task, for example `IMAGE_CLASSIFICATION`. The other values are `TEXT_EMBEDDING`, `TEXT_CLASSIFICATION`, `OBJECT_DETECTION` and `NONE`.
 
 Next: [Samples](Samples.md).

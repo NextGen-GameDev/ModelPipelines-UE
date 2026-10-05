@@ -149,7 +149,7 @@ Blueprint version:
 4. On Success: store `Detections`.
 5. In your HUD **Event Receive Draw HUD**: **For Each Loop** over `Detections`. For each, draw a rectangle from **Box Min** to **Box Max**, each multiplied by the canvas size, and the **Label** and **Score**.
 
-If you resize the window during Play, the boxes can drift until the next Play. See [Troubleshooting](Troubleshooting.md#detection-boxes-drift-after-resizing-the-window).
+If the boxes do not line up with the objects, see [Troubleshooting](Troubleshooting.md#detection-boxes-dont-line-up-with-the-objects).
 
 ## Performance
 

@@ -28,9 +28,13 @@ You see **Model folder import failed** and a report. Nothing is created. Common 
 
 The download script may print a warning about `hf_xet`. It is harmless. The download still works.
 
-## Detection boxes drift after resizing the window
+## Detection boxes don't line up with the objects
 
-In `L_Detection` the boxes line up with the view because the capture copies your camera's projection when Play starts. If you resize the window during Play, the boxes can drift until the next Play. Stop and press Play again.
+Check these causes:
+
+- The model only sees what the capture sees. Anything outside the capture's view, or hidden by other actors, gets no box.
+- A **ScoreThreshold** that is too low shows weak boxes on things that are not there. Raise it, for example to 0.5.
+- Very small objects far away are missed. Fly closer.
 
 ## Wrong task
 

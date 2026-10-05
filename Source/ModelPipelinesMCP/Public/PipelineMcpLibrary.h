@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
+#include "PipelineMcpJob.h"
 #include "PipelineMcpLibrary.generated.h"
 
 /**
@@ -59,4 +60,41 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|MCP")
 	static FString ValidateModelPackage(const FString& Package, bool bRunSmokeTest = true, bool bCheckGpu = true);
+
+	/**
+	 * Benchmarks a model package without blocking: per device (CPU then GPU) a transient duplicate of the package with that
+	 * PreferredDevice (the asset is never modified), the task's pipeline, then Runs + 1 sequential calls (the first is a
+	 * warm-up, reported as first_ms). Result JSON (on the job): {"package","task","runs","input","devices":[{"device",
+	 * "available","actual_device","first_ms","inference_ms":{"median","p90","min","max"},"preprocess_ms":{"median"},
+	 * "postprocess_ms":{"median"},"total_ms":{"median","p90","min","max"},"memory_mb":{"before","after_warmup","delta"}}]}.
+	 * An unavailable GPU is {"device":"GPU","available":false}; a pipeline or call failure is an "error" field on that entry.
+	 * Argument errors (unknown package, Runs outside 1..1000, Devices not cpu|gpu|both, more than 64 texts, Image not a
+	 * texture for an image task) fail the job. Completes on a later game-thread tick, never inside this call.
+	 * Off the game thread: logs a Warning and returns nullptr (the only null case).
+	 * @param Package  Object path or package name of the UPipelineModelPackage.
+	 * @param Runs     Measured calls per device, 1..1000.
+	 * @param Devices  "cpu", "gpu" or "both" (case-insensitive).
+	 * @param Texts    Text tasks: the batch of one call (max 64; empty = one default sentence). Ignored for image tasks.
+	 * @param Image    Image tasks: texture object path or package name ("" = synthetic mid-gray image of the model input size).
+	 *                 Ignored for text tasks.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|MCP")
+	static UPipelineMcpJob* BenchmarkModelPackage(const FString& Package, int32 Runs, const FString& Devices,
+		const TArray<FString>& Texts, const FString& Image);
+
+	/**
+	 * Runs one call of a model package (its own PreferredDevice) on the given texts or texture and returns a readable result
+	 * on the job: embeddings (dim, norm, head, cosine similarity matrix for 2+ texts), text classification top-k per text,
+	 * image classification top-k, or detections (label, index, score, normalized box [x0,y0,x1,y1], score-descending).
+	 * Errors fail the job with {"error":"..."}. Completes on a later game-thread tick, never inside this call.
+	 * Off the game thread: logs a Warning and returns nullptr (the only null case).
+	 * @param Package         Object path or package name of the UPipelineModelPackage.
+	 * @param Texts           Text tasks: 1..64 strings. Ignored for image tasks.
+	 * @param Image           Image tasks: texture object path or package name (required). Ignored for text tasks.
+	 * @param TopK            Classification: number of labels per result, clamped to 1..label count.
+	 * @param ScoreThreshold  Object detection: keep detections scoring above it, 0..1.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|MCP")
+	static UPipelineMcpJob* RunPipelineSample(const FString& Package, const TArray<FString>& Texts,
+		const FString& Image, int32 TopK, float ScoreThreshold);
 };

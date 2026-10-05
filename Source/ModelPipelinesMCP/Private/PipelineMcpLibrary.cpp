@@ -15,6 +15,7 @@
 #include "UObject/UObjectGlobals.h"
 #include "PipelineMcpJson.h"
 #include "PipelineMcpLog.h"
+#include "PipelineMcpRun.h"
 #include "PipelineModelFolder.h"
 #include "PipelineModelImporter.h"
 #include "PipelineModelPackage.h"
@@ -33,10 +34,7 @@ namespace PipelineMcpLibraryPrivate
 	static const TCHAR* MsgAssetsExist = TEXT("Assets already exist; pass overwrite_existing=true (updates them in place) or another asset_name.");
 
 	/** Same limit as the importer (PipelineModelImporter.cpp, MaxLongPackageNameLen): FName asserts on very long strings. */
-	static constexpr int32 MaxLongPackageNameLen = 200;
-
-	/** Longest accepted package reference (object path) before any FName is built. */
-	static constexpr int32 MaxReferenceLen = 2 * MaxLongPackageNameLen + 1;
+	static constexpr int32 MaxLongPackageNameLen = PipelineMcpJson::MaxLongPackageNameLen;
 
 	/** Last path component of a folder path, trailing separators ignored (mirrors the importer's FolderLeafOf). */
 	static FString FolderLeafOf(const FString& Folder)
@@ -205,48 +203,12 @@ namespace PipelineMcpLibraryPrivate
 
 	/**
 	 * Resolves an object path or package name to a loaded UPipelineModelPackage; nullptr when the string is not a valid
-	 * reference, nothing exists there, or the object has another class. Strings are checked before any FName is built.
+	 * reference, nothing exists there, or the object has another class. Strings are checked before any FName is built
+	 * (PipelineMcpJson::ResolveAsset).
 	 */
 	static UPipelineModelPackage* ResolvePackage(const FString& Arg)
 	{
-		if (Arg.IsEmpty() || Arg.Len() > MaxReferenceLen)
-		{
-			return nullptr;
-		}
-		FString PackageName;
-		FString ObjectName;
-		int32 Dot = INDEX_NONE;
-		if (Arg.FindChar(TEXT('.'), Dot))
-		{
-			PackageName = Arg.Left(Dot);
-			ObjectName = Arg.Mid(Dot + 1);
-		}
-		else
-		{
-			PackageName = Arg;
-			int32 Slash = INDEX_NONE;
-			ObjectName = Arg.FindLastChar(TEXT('/'), Slash) ? Arg.Mid(Slash + 1) : FString();
-		}
-		if (PackageName.Len() > MaxLongPackageNameLen || ObjectName.IsEmpty() || ObjectName.Len() > MaxLongPackageNameLen)
-		{
-			return nullptr;
-		}
-		if (!FPackageName::IsValidLongPackageName(PackageName, true))
-		{
-			return nullptr;
-		}
-		if (ObjectName.Equals(TEXT("None"), ESearchCase::IgnoreCase) || !FName::IsValidXName(ObjectName, INVALID_OBJECTNAME_CHARACTERS))
-		{
-			return nullptr;
-		}
-		const FString ObjectPath = PackageName + TEXT(".") + ObjectName;
-		UObject* Obj = FindObject<UObject>(nullptr, *ObjectPath);
-		if (!Obj && FPackageName::DoesPackageExist(PackageName))
-		{
-			Obj = LoadObject<UObject>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
-		}
-		UPipelineModelPackage* Pkg = Cast<UPipelineModelPackage>(Obj);
-		return IsValid(Pkg) ? Pkg : nullptr;
+		return Cast<UPipelineModelPackage>(PipelineMcpJson::ResolveAsset(Arg));
 	}
 
 	/** Package entry of ListModelPackages. */
@@ -448,4 +410,26 @@ FString UPipelineMcpLibrary::ValidateModelPackage(const FString& Package, bool b
 	Root->SetNumberField(TEXT("warnings"), Report.NumWarnings());
 	Root->SetObjectField(TEXT("report"), PipelineMcpJson::ReportToJson(Report));
 	return PipelineMcpJson::ToCondensedString(Root);
+}
+
+UPipelineMcpJob* UPipelineMcpLibrary::BenchmarkModelPackage(const FString& Package, int32 Runs, const FString& Devices,
+	const TArray<FString>& Texts, const FString& Image)
+{
+	if (!IsInGameThread())
+	{
+		UE_LOG(LogModelPipelinesMCP, Warning, TEXT("BenchmarkModelPackage must be called on the game thread; returning nullptr."));
+		return nullptr;
+	}
+	return PipelineMcpRun::LaunchBenchmark(Package, Runs, Devices, Texts, Image);
+}
+
+UPipelineMcpJob* UPipelineMcpLibrary::RunPipelineSample(const FString& Package, const TArray<FString>& Texts,
+	const FString& Image, int32 TopK, float ScoreThreshold)
+{
+	if (!IsInGameThread())
+	{
+		UE_LOG(LogModelPipelinesMCP, Warning, TEXT("RunPipelineSample must be called on the game thread; returning nullptr."));
+		return nullptr;
+	}
+	return PipelineMcpRun::LaunchSample(Package, Texts, Image, TopK, ScoreThreshold);
 }

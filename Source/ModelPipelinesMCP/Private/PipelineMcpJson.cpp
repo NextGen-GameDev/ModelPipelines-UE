@@ -3,10 +3,13 @@
 #include "PipelineMcpJson.h"
 
 #include "Math/UnrealMathUtility.h"
+#include "Misc/PackageName.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/Class.h"
+#include "UObject/NameTypes.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace PipelineMcpJsonPrivate
 {
@@ -115,5 +118,51 @@ namespace PipelineMcpJson
 		TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
 		Obj->SetStringField(TEXT("error"), Message);
 		return ToCondensedString(Obj);
+	}
+
+	FString ErrorToString(EPipelineError Error)
+	{
+		return PipelineMcpJsonPrivate::EnumName(Error);
+	}
+
+	UObject* ResolveAsset(const FString& Arg)
+	{
+		if (Arg.IsEmpty() || Arg.Len() > MaxReferenceLen)
+		{
+			return nullptr;
+		}
+		FString PackageName;
+		FString ObjectName;
+		int32 Dot = INDEX_NONE;
+		if (Arg.FindChar(TEXT('.'), Dot))
+		{
+			PackageName = Arg.Left(Dot);
+			ObjectName = Arg.Mid(Dot + 1);
+		}
+		else
+		{
+			PackageName = Arg;
+			int32 Slash = INDEX_NONE;
+			ObjectName = Arg.FindLastChar(TEXT('/'), Slash) ? Arg.Mid(Slash + 1) : FString();
+		}
+		if (PackageName.Len() > MaxLongPackageNameLen || ObjectName.IsEmpty() || ObjectName.Len() > MaxLongPackageNameLen)
+		{
+			return nullptr;
+		}
+		if (!FPackageName::IsValidLongPackageName(PackageName, true))
+		{
+			return nullptr;
+		}
+		if (ObjectName.Equals(TEXT("None"), ESearchCase::IgnoreCase) || !FName::IsValidXName(ObjectName, INVALID_OBJECTNAME_CHARACTERS))
+		{
+			return nullptr;
+		}
+		const FString ObjectPath = PackageName + TEXT(".") + ObjectName;
+		UObject* Obj = FindObject<UObject>(nullptr, *ObjectPath);
+		if (!Obj && FPackageName::DoesPackageExist(PackageName))
+		{
+			Obj = LoadObject<UObject>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+		}
+		return IsValid(Obj) ? Obj : nullptr;
 	}
 }

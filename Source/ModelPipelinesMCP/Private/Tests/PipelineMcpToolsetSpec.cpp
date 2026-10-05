@@ -238,7 +238,14 @@ try:
         if res is None:
             _write(False, "execute_tool returned None", None)
         else:
-            res.on_completed.add_callable(_done)
+            # A Python callable bound to a dynamic delegate lives in a proxy UObject that only a live delegate *wrapper*
+            # keeps alive (PyWrapperDelegate.cpp:206-212): keep the wrapper (and res, _done) in a persistent place.
+            delegate = res.on_completed
+            delegate.add_callable(_done)
+            import builtins
+            builtins.__dict__.setdefault("_model_pipelines_mcp_test_keep", []).append((res, delegate, _done))
+            # Force a GC while the call is in flight: a tool that doesn't keep its own callbacks alive never completes.
+            unreal.SystemLibrary.collect_garbage()
             res.broadcast_on_completed_if_complete()
 except Exception:
     _write(False, "script exception: " + traceback.format_exc(), None)
@@ -345,11 +352,18 @@ void FPipelineMcpToolsetSpec::RunPy(const FString& Mode, const FString& Tool, co
 		OnDone(Fail);
 		return;
 	}
-
-	const double Deadline = FPlatformTime::Seconds() + TimeoutSec;
+	const double Started = FPlatformTime::Seconds();
+	const double Deadline = Started + TimeoutSec;
 	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
-		[this, OutPath, Deadline, TimeoutSec, Tool, Mode, OnDone](float) -> bool
+		[this, OutPath, Started, Deadline, TimeoutSec, Tool, Mode, OnDone](float) -> bool
 		{
+			// The registry runs the tool on a later main-thread task, so its callbacks get bound after `py` returned. A synchronous
+			// full GC on every poll during the first 2 s: an async tool that doesn't keep its Python callback's delegate wrapper
+			// alive loses the callback and never completes (C39, WP6.3 review).
+			if (FPlatformTime::Seconds() - Started < 2.0)
+			{
+				CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+			}
 			FString Text;
 			if (IFileManager::Get().FileExists(*OutPath) && FFileHelper::LoadFileToString(Text, *OutPath))
 			{

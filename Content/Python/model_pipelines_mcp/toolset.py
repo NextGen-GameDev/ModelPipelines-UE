@@ -12,9 +12,10 @@ import unreal
 
 import toolset_registry
 
-# (job, async result, callback) per running async tool call, keyed by id(job). Keeps the Python wrappers (and with them the
-# UObjects) alive until the job completes; the entry is dropped on completion.
-_PENDING: dict[int, tuple[Any, Any, Any]] = {}
+# (job, async result, callback, on_done delegate wrapper) per running async tool call, keyed by id(job). Keeps the Python
+# wrappers (and with them the UObjects, including the delegate's callable proxy) alive until the job completes; the entry
+# is dropped on completion.
+_PENDING: dict[int, tuple[Any, Any, Any, Any]] = {}
 
 
 def _error_of(text: str) -> str | None:
@@ -81,12 +82,12 @@ def _chain_job(job: Any) -> Any:
         except Exception as error:  # pylint: disable=broad-except
             target.set_error(f"could not complete the tool result: {error}")
 
-    _PENDING[key] = (job, result, _on_done)
-    job.on_done.add_callable(_on_done)
-    # The job never completes inside the call that created it, but guard against a completion between the checks.
-    if job.is_done() and key in _PENDING:
-        _PENDING.pop(key, None)
-        _complete(result, bool(job.succeeded()), job.get_json())
+    # Keep the delegate wrapper itself: add_callable binds a UPythonCallableForDelegate proxy that delegates hold only
+    # weakly (PyWrapperDelegate.cpp:206-212); the live multicast wrapper reports it to GC (PyWrapperDelegate.cpp:1263,
+    # PyReferenceCollector.cpp:267-275). A temporary `job.on_done` wrapper would let a GC drop the callback.
+    done_delegate = job.on_done
+    _PENDING[key] = (job, result, _on_done, done_delegate)
+    done_delegate.add_callable(_on_done)
     return result
 
 

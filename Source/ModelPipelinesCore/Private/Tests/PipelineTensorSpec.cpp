@@ -183,6 +183,8 @@ void FPipelineTensorSpec::Define()
 		// These log Warnings to LogModelPipelines; warnings do not fail the test.
 		It("rejects a value count that differs from the element count", [this]()
 		{
+			AddExpectedMessage(TEXT("FPipelineTensor::FromFloat: "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2, false);
+			AddExpectedMessage(TEXT("FPipelineTensor::FromInt"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2, false);
 			const TArray<int64> Shape = {2, 2};
 			const TArray<float> Vals = {1.f, 2.f, 3.f};
 			ExpectInvalid(FPipelineTensor::FromFloat(Shape, Vals), TEXT("FromFloat {2,2} with 3 values"));
@@ -196,6 +198,8 @@ void FPipelineTensorSpec::Define()
 
 		It("rejects a negative dim", [this]()
 		{
+			AddExpectedMessage(TEXT("FPipelineTensor::Zeros: dim "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+			AddExpectedMessage(TEXT("FPipelineTensor::FromFloat: dim "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			const TArray<int64> Shape = {2, -1};
 			ExpectInvalid(FPipelineTensor::Zeros(EPipelineTensorType::Float32, Shape), TEXT("Zeros {2,-1}"));
 			const TArray<float> Vals = {1.f, 2.f};
@@ -204,6 +208,7 @@ void FPipelineTensorSpec::Define()
 
 		It("rejects rank 9 but accepts rank 8", [this]()
 		{
+			AddExpectedMessage(TEXT("FPipelineTensor::Zeros: rank "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			const TArray<int64> Rank9 = {1, 1, 1, 1, 1, 1, 1, 1, 1};
 			ExpectInvalid(FPipelineTensor::Zeros(EPipelineTensorType::Float32, Rank9), TEXT("Zeros rank 9"));
 			const TArray<int64> Rank8 = {1, 1, 1, 1, 1, 1, 1, 1};
@@ -214,12 +219,14 @@ void FPipelineTensorSpec::Define()
 
 		It("rejects a dim larger than MAX_uint32", [this]()
 		{
+			AddExpectedMessage(TEXT("FPipelineTensor::Zeros: dim "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			const TArray<int64> Shape = {1ll << 33};
 			ExpectInvalid(FPipelineTensor::Zeros(EPipelineTensorType::Int32, Shape), TEXT("Zeros {1<<33}"));
 		});
 
 		It("rejects byte-size overflow without allocating", [this]()
 		{
+			AddExpectedMessage(TEXT("FPipelineTensor::Zeros: element count or byte size of shape "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2, false);
 			const TArray<int64> Shape = {1ll << 31, 1ll << 31};
 			ExpectInvalid(FPipelineTensor::Zeros(EPipelineTensorType::Float32, Shape), TEXT("Zeros {1<<31,1<<31}"));
 			// Element count itself overflows int64 when many large dims multiply.
@@ -229,6 +236,7 @@ void FPipelineTensorSpec::Define()
 
 		It("rejects over 4 GiB without allocating", [this]()
 		{
+			AddExpectedMessage(TEXT("FPipelineTensor::Zeros: shape "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			// 2^31 * 2 floats = 8 GiB. A wrapper that allocated first would hit OOM or take very long.
 			const TArray<int64> Shape = {1ll << 31, 2};
 			ExpectInvalid(FPipelineTensor::Zeros(EPipelineTensorType::Float32, Shape), TEXT("Zeros {1<<31,2}"));
@@ -359,6 +367,8 @@ void FPipelineTensorSpec::Define()
 
 		It("does not infer -1", [this]()
 		{
+			AddExpectedMessage(TEXT("FPipelineTensor::Reshape: dim "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+			AddExpectedMessage(TEXT("FPipelineTensor::Reshape: rank "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			const TArray<int64> Shape = {2, 3};
 			const TArray<float> Vals = {1.f, 2.f, 3.f, 4.f, 5.f, 6.f};
 			FPipelineTensor T = FPipelineTensor::FromFloat(Shape, Vals);
@@ -373,6 +383,7 @@ void FPipelineTensorSpec::Define()
 
 		It("returns false on an invalid tensor", [this]()
 		{
+			AddExpectedMessage(TEXT("FPipelineTensor::Zeros: dim "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			FPipelineTensor T;
 			const TArray<int64> Shape = {1};
 			TestFalse(TEXT("reshape of default tensor expected false"), T.Reshape(Shape));

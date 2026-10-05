@@ -217,16 +217,24 @@ namespace TextSamplesSpecPrivate
 		return A ? UEnum::GetValueAsString(A->GetSampleState()) : FString(TEXT("(null actor)"));
 	}
 
-	/** Ignore any warning/error lines the engine or the creators log on the failure paths (the sample's own text is checked directly). */
-	static void IgnoreLogNoise(FAutomationTestBase& T)
-	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
-	}
-
-	/** Rule 1 requires a Warning from the sample: expect at least one. */
+	/** The sample's own "Model package not found" Warning (MissingPackage / unset package): exactly one line per test. */
 	static void ExpectWarning(FAutomationTestBase& T)
 	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+		T.AddExpectedMessage(TEXT("Model package not found: "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+		// Engine noise: the first load of the missing package path logs this once per process (cached afterwards), so which test sees it depends on run order.
+		T.AddExpectedMessage(TEXT("LoadPackage: SkipPackage: /Game/Models/does-not-exist"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1, false);
+	}
+
+	/** The creator's rejection of a package of the wrong task, logged once by the sample ("could not create the pipeline from ...: package task is X, this pipeline needs Y"). */
+	static void ExpectWrongTask(FAutomationTestBase& T)
+	{
+		T.AddExpectedMessage(TEXT("could not create the pipeline from [^ ]+: package task is \\w+, this pipeline needs \\w+"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	}
+
+	/** Engine noise that is not ours: the sample test worlds have no world context, so AActor::Destroy logs this. Count varies with how many actors each test destroys. */
+	static void ExpectWorldNoContext(FAutomationTestBase& T)
+	{
+		T.AddExpectedMessage(TEXT("UWorld::DestroyActor: World has no context!"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1, false);
 	}
 
 	// ---------------------------------------------------------------- semantic search references
@@ -881,7 +889,7 @@ void FTextSamplesSpec::Define()
 		LatentIt("WrongTaskSentiment", LatentLimit, [this, RunBad](const FDoneDelegate& Done)
 		{
 			// An embedding package on the sentiment sample: the creator rejects it -> Failed, "Could not create the pipeline: <message>".
-			IgnoreLogNoise(*this);
+			ExpectWrongTask(*this);
 			RunBad(Done, false, /*bEmbedPkgForWrongTask*/ true, nullptr, /*bWrongTask*/ true, [this](AModelPipelinesSampleBase* A)
 			{
 				TestTrue(*FString::Printf(TEXT("state is Failed, was %s (status: %s)"), *StateName(A), *A->GetStatusText()), StateIs(A, EPipelineSampleState::Failed));
@@ -894,7 +902,7 @@ void FTextSamplesSpec::Define()
 		LatentIt("WrongTaskSearch", LatentLimit, [this, RunBad](const FDoneDelegate& Done)
 		{
 			// A classification package on the semantic-search sample -> Failed, same prefix.
-			IgnoreLogNoise(*this);
+			ExpectWrongTask(*this);
 			RunBad(Done, true, /*bEmbedPkgForWrongTask*/ false, nullptr, /*bWrongTask*/ true, [this](AModelPipelinesSampleBase* A)
 			{
 				TestTrue(*FString::Printf(TEXT("state is Failed, was %s (status: %s)"), *StateName(A), *A->GetStatusText()), StateIs(A, EPipelineSampleState::Failed));
@@ -908,6 +916,7 @@ void FTextSamplesSpec::Define()
 	{
 		LatentIt("DestroyedWhileAnalyzing", LatentLimit, [this](const FDoneDelegate& Done)
 		{
+			ExpectWorldNoContext(*this);
 			// Analyze, then destroy the actor in the same frame (the call is in flight), force a GC, and let the result arrive:
 			// no crash and no OnSampleResult afterwards (rule 4, weak this).
 			Fix = NewFix(*this, false, true);
@@ -935,6 +944,7 @@ void FTextSamplesSpec::Define()
 
 		LatentIt("DestroyedDuringCorpusEmbedding", LatentLimit, [this](const FDoneDelegate& Done)
 		{
+			ExpectWorldNoContext(*this);
 			// Destroy the search sample while the corpus is still being embedded: no crash, no OnSampleResult, no second call.
 			Fix = NewFix(*this, true, false);
 			if (!Fix.IsValid()) { Done.ExecuteIfBound(); return; }
@@ -963,6 +973,7 @@ void FTextSamplesSpec::Define()
 
 		LatentIt("DestroyedWhileLoading", LatentLimit, [this](const FDoneDelegate& Done)
 		{
+			ExpectWorldNoContext(*this);
 			// Destroy in the same frame as BeginPlay (async package load still pending): the load completion must not touch the dead actor.
 			Fix = NewFix(*this, false, true);
 			if (!Fix.IsValid()) { Done.ExecuteIfBound(); return; }

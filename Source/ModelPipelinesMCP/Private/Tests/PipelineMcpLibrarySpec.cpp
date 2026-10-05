@@ -527,7 +527,6 @@ void FPipelineMcpLibrarySpec::Define()
 
 		It("reports parse errors of missing_model without needs_confirm", [this]()
 		{
-			AddExpectedMessage(TEXT("missing_model"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			FString Folder;
 			if (!RequireFolder(TEXT("missing_model"), Folder)) { return; }
 			const FString Json = UPipelineMcpLibrary::ImportModelFolder(Folder, Dest, TEXT(""), false, false);
@@ -566,7 +565,10 @@ void FPipelineMcpLibrarySpec::Define()
 
 		It("handles empty, missing and garbage source folders without crashing", [this]()
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+			// Real editor-import log lines for unusable folders (counts vary with which inputs fail before logging).
+			AddExpectedMessage(TEXT("Error FolderNotFound: Model folder '[^']*' does not exist or is not a folder"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+			AddExpectedMessage(TEXT("Error FolderNotFound: Model folder path is empty"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+			AddExpectedMessage(TEXT("Import of '[^']*' failed: \\d+ errors"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			const TSharedPtr<FJsonObject> Empty = Parse(UPipelineMcpLibrary::ImportModelFolder(TEXT(""), Dest, TEXT(""), false, false), TEXT("Import empty"));
 			if (Empty.IsValid())
 			{
@@ -586,9 +588,11 @@ void FPipelineMcpLibrarySpec::Define()
 					const TSharedPtr<FJsonObject> J = Parse(Json, TEXT("Import garbage"));
 					if (!J.IsValid()) { continue; }
 					if (J->HasField(TEXT("error"))) { continue; } // an error object is an acceptable answer for garbage
-					bool bSuccess = true, bNeeds = true;
+					bool bSuccess = true, bNeeds = false;
 					J->TryGetBoolField(TEXT("success"), bSuccess);
-					J->TryGetBoolField(TEXT("needs_confirm"), bNeeds);
+					// C38: a confirm=true result has no needs_confirm field (absent = false); confirm=false must carry it, set to false.
+					if (Confirm == 0) { TestTrue(*FString::Printf(TEXT("garbage folder '%s' confirm=0: needs_confirm present; got %s"), *G.Left(30), *Json.Left(300)), J->TryGetBoolField(TEXT("needs_confirm"), bNeeds)); }
+					else { J->TryGetBoolField(TEXT("needs_confirm"), bNeeds); }
 					TestFalse(*FString::Printf(TEXT("garbage folder '%s' confirm=%d: success; got %s"), *G.Left(30), Confirm, *Json.Left(300)), bSuccess);
 					TestFalse(*FString::Printf(TEXT("garbage folder '%s' confirm=%d: needs_confirm; got %s"), *G.Left(30), Confirm, *Json.Left(300)), bNeeds);
 				}
@@ -601,7 +605,10 @@ void FPipelineMcpLibrarySpec::Define()
 	{
 		It("imports tiny_text_classification, then reports exists and honours overwrite", [this]()
 		{
-			AddExpectedMessage(TEXT("tiny_text_classification"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+			// Engine noise, not ours: the previous test deleted these assets and the registry re-reports the files; -1 because it depends on registry timing.
+			AddExpectedMessage(TEXT("Import 'tiny_text_classification': Error AssetExists"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2, false);
+			AddExpectedMessage(TEXT("Import of 'tiny_text_classification' failed: 2 errors"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+			AddExpectedMessage(TEXT("package was marked as deleted in editor, but has been modified on disk"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1, false);
 			FString Folder;
 			if (!RequireFolder(TEXT("tiny_text_classification"), Folder)) { return; }
 			const FString PkgObj = ObjPath(Dest, TEXT("tiny_text_classification"));
@@ -681,7 +688,8 @@ void FPipelineMcpLibrarySpec::Define()
 
 		It("fails cleanly on bad_config_json and leaves nothing behind", [this]()
 		{
-			AddExpectedMessage(TEXT("bad_config_json"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+			AddExpectedMessage(TEXT("Import 'bad_config_json': Error InvalidJson: config.json: not valid JSON"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+			AddExpectedMessage(TEXT("Import of 'bad_config_json' failed: 1 errors"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			FString Folder;
 			if (!RequireFolder(TEXT("bad_config_json"), Folder)) { return; }
 			const FString Json = UPipelineMcpLibrary::ImportModelFolder(Folder, Dest, TEXT(""), false, true);
@@ -704,7 +712,9 @@ void FPipelineMcpLibrarySpec::Define()
 
 		It("fails cleanly on missing_model with confirm=true", [this]()
 		{
-			AddExpectedMessage(TEXT("missing_model"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+			AddExpectedMessage(TEXT("Import 'missing_model': Error MissingModelFile"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+			AddExpectedMessage(TEXT("Import 'missing_model': Error MissingTokenizer"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+			AddExpectedMessage(TEXT("Import of 'missing_model' failed: 2 errors"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			FString Folder;
 			if (!RequireFolder(TEXT("missing_model"), Folder)) { return; }
 			const FString Json = UPipelineMcpLibrary::ImportModelFolder(Folder, Dest, TEXT(""), false, true);
@@ -807,10 +817,6 @@ void FPipelineMcpLibrarySpec::Define()
 
 		It("returns 'Model package not found' for empty, missing, malformed and wrong-class references", [this]()
 		{
-			AddExpectedMessage(TEXT("Nope"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
-			AddExpectedMessage(TEXT("DefaultTexture"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
-			AddExpectedMessage(TEXT("not a path"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
-			AddExpectedMessage(TEXT("DoesNotExist"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			const TArray<FString> Args = {
 				TEXT(""),
 				TEXT("/Game/Nope"),
@@ -833,7 +839,6 @@ void FPipelineMcpLibrarySpec::Define()
 
 		It("does not crash on a 2000-char or non-ASCII reference", [this]()
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			const TArray<FString> Args = { TEXT("/Game/") + FString::ChrN(2000, TEXT('a')), TEXT("/Game/") + FString::ChrN(2000, TEXT('b')) + TEXT(".x"),
 				FString(TEXT("/Game/\u6a21\u578b/\u6a21\u578b.\u6a21\u578b")), FString::ChrN(4000, TEXT('/')) };
 			for (const FString& A : Args)
@@ -857,7 +862,8 @@ void FPipelineMcpLibrarySpec::Define()
 	{
 		It("round-trips a non-ASCII asset_name through the JSON", [this]()
 		{
-			AddExpectedMessage(TEXT("tiny_text_classification|package was marked as deleted in editor"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+			// Engine noise, not ours: the previous test deleted these assets and the registry re-reports the files; -1 because it depends on registry timing.
+			AddExpectedMessage(TEXT("package was marked as deleted in editor, but has been modified on disk"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1, false);
 			FString Folder;
 			if (!RequireFolder(TEXT("tiny_text_classification"), Folder)) { return; }
 			const FString Name = TEXT("\u6a21\u578b");

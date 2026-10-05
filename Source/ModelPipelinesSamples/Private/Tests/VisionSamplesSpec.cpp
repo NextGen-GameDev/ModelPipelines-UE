@@ -90,17 +90,43 @@ namespace VisionSamplesSpecPrivate
 		return A ? UEnum::GetValueAsString(A->GetSampleState()) : FString(TEXT("(null actor)"));
 	}
 
-	/** Ignore warning/error lines the engine or the creators log on failure paths (the sample's own text is checked directly). */
-	static void IgnoreLogNoise(FAutomationTestBase& T)
-	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, -1);
-	}
-
-	/** Rule 1 requires a Warning from the sample: expect at least one. */
+	/** The sample's own "Model package not found" Warning (MissingPackage / unset package): exactly one line per test. */
 	static void ExpectWarning(FAutomationTestBase& T)
 	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+		T.AddExpectedMessage(TEXT("Model package not found: "), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+		// Engine noise: the first load of the missing package path logs this once per process (cached afterwards), so which test sees it depends on run order.
+		T.AddExpectedMessage(TEXT("LoadPackage: SkipPackage: /Game/Models/does-not-exist"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1, false);
+	}
+
+	/** The creator's rejection of a package of the wrong task, logged once by the sample ("could not create the pipeline from ...: package task is X, this pipeline needs Y"). */
+	static void ExpectWrongTask(FAutomationTestBase& T)
+	{
+		T.AddExpectedMessage(TEXT("could not create the pipeline from [^ ]+: package task is \\w+, this pipeline needs \\w+"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	}
+
+	/** Engine noise that is not ours: the sample test worlds have no world context, so AActor::Destroy logs this. Count varies with how many actors each test destroys. */
+	static void ExpectWorldNoContext(FAutomationTestBase& T)
+	{
+		T.AddExpectedMessage(TEXT("UWorld::DestroyActor: World has no context!"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1, false);
+	}
+
+	/** K2 handled ensure (Ensure condition failed: IsInGameThread() in AppTime.cpp, "no inherited time context") that the renderer raises on a worker thread in a renderer
+	 *  run when two texture calls race. Engine noise, not ours; a handled ensure fires once per process, so -1. Every Error line of the ensure report needs its own pattern. */
+	static void ExpectK2HandledEnsure(FAutomationTestBase& T)
+	{
+		T.AddExpectedMessage(TEXT("=== Handled ensure: ==="), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, -1, false);
+		T.AddExpectedMessage(TEXT("Ensure condition failed: IsInGameThread()"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, -1, false);
+		T.AddExpectedMessage(TEXT("Attempted to retrieve FAppTime on a thread where there is no inherited time context"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, -1, false);
+		T.AddExpectedMessage(TEXT("^Stack:\\s*$"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, -1);
+		T.AddExpectedMessage(TEXT("[Callstack] 0x"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, -1, false);
+		// The ensure report logs a blank line before and after the stack; only a blank message can match this.
+		T.AddExpectedMessage(TEXT("^\\s*$"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, -1);
+	}
+
+	/** Sample line when a texture call runs under -nullrhi. Count varies (0 in a renderer run, one per call headless), so -1. */
+	static void ExpectNoRhiCallFailed(FAutomationTestBase& T)
+	{
+		T.AddExpectedMessage(TEXT("call failed: texture input needs a GPU RHI"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1, false);
 	}
 
 	/** true = skip this RHI test (message added). With MODELPIPELINES_REQUIRE_RHI=1 a missing RHI is an error instead. */
@@ -1066,7 +1092,7 @@ void FVisionSamplesSpec::Define()
 				Done.ExecuteIfBound();
 				return;
 			}
-			IgnoreLogNoise(*this);
+			ExpectNoRhiCallFailed(*this);
 			Fix = NewFix(*this, !bDet, bDet);
 			if (!Fix.IsValid()) { Done.ExecuteIfBound(); return; }
 			const TSharedRef<FFix> F = Fix.ToSharedRef();
@@ -1103,7 +1129,7 @@ void FVisionSamplesSpec::Define()
 		{
 			// A call right after BeginPlay (state Loading, pipeline not created yet) must be harmless: no crash, the sample ends Ready (not
 			// stuck Loading/Busy) and never reports more than the one result.
-			IgnoreLogNoise(*this);
+			ExpectNoRhiCallFailed(*this);
 			Fix = NewFix(*this, !bDet, bDet);
 			if (!Fix.IsValid()) { Done.ExecuteIfBound(); return; }
 			const TSharedRef<FFix> F = Fix.ToSharedRef();
@@ -1206,7 +1232,7 @@ void FVisionSamplesSpec::Define()
 		LatentIt("WrongTaskClassifier", LatentLimit, [this, RunBad](const FDoneDelegate& Done)
 		{
 			// An object-detection package on the classifier sample: the creator rejects it -> Failed, "Could not create the pipeline: <message>".
-			IgnoreLogNoise(*this);
+			ExpectWrongTask(*this);
 			RunBad(Done, false, nullptr, true, [this](AModelPipelinesSampleBase* A)
 			{
 				const FString Prefix(TEXT("Could not create the pipeline: "));
@@ -1219,7 +1245,7 @@ void FVisionSamplesSpec::Define()
 		LatentIt("WrongTaskDetection", LatentLimit, [this, RunBad](const FDoneDelegate& Done)
 		{
 			// An image-classification package on the detection sample.
-			IgnoreLogNoise(*this);
+			ExpectWrongTask(*this);
 			RunBad(Done, true, nullptr, true, [this](AModelPipelinesSampleBase* A)
 			{
 				const FString Prefix(TEXT("Could not create the pipeline: "));
@@ -1236,7 +1262,7 @@ void FVisionSamplesSpec::Define()
 		{
 			// Call, then destroy the actor in the same frame (the call is in flight), force a GC and let time pass: no crash, no OnSampleResult
 			// afterwards (rule 4: weak this). A callback that kept a raw this pointer would crash or fire here.
-			IgnoreLogNoise(*this);
+			ExpectWorldNoContext(*this);
 			Fix = NewFix(*this, !bDet, bDet);
 			if (!Fix.IsValid()) { Done.ExecuteIfBound(); return; }
 			const TSharedRef<FFix> F = Fix.ToSharedRef();
@@ -1266,7 +1292,8 @@ void FVisionSamplesSpec::Define()
 		{
 			// Two calls in the same frame: the first runs, the second waits in the single pending slot (latest wins, never dropped, never stacked).
 			// Exactly two results arrive, the pipeline never has 2 calls in flight, the sample ends Ready.
-			IgnoreLogNoise(*this);
+			ExpectNoRhiCallFailed(*this);
+			ExpectK2HandledEnsure(*this);
 			Fix = NewFix(*this, !bDet, bDet);
 			if (!Fix.IsValid()) { Done.ExecuteIfBound(); return; }
 			const TSharedRef<FFix> F = Fix.ToSharedRef();
@@ -1294,6 +1321,7 @@ void FVisionSamplesSpec::Define()
 
 		LatentIt("DestroyedWhileLoading", LatentLimit, [this](const FDoneDelegate& Done)
 		{
+			ExpectWorldNoContext(*this);
 			// Destroy in the same frame as BeginPlay (async package load pending): the load completion must not touch the dead actor.
 			Fix = NewFix(*this, false, true);
 			if (!Fix.IsValid()) { Done.ExecuteIfBound(); return; }
@@ -1320,7 +1348,7 @@ void FVisionSamplesSpec::Define()
 		{
 			// bShowOverlay = true in a world without a game viewport: no crash, no overlay, and the sample still works (reaches Ready, one call
 			// delivers one result).
-			IgnoreLogNoise(*this);
+			ExpectNoRhiCallFailed(*this);
 			Fix = NewFix(*this, !bDet, bDet);
 			if (!Fix.IsValid()) { Done.ExecuteIfBound(); return; }
 			const TSharedRef<FFix> F = Fix.ToSharedRef();

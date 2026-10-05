@@ -499,7 +499,6 @@ void FPipelineMcpJobSpec::Define()
 	{
 		LatentIt("defers an immediate error: IsDone false after the call, OnDone once later with the exact error (Runs 0)", LongTimeout, [this](const FDoneDelegate& Done)
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			FString Pkg;
 			if (!ImportPkg(TEXT("import_test/tiny_text_embedding"), TEXT("Emb"), Pkg)) { Done.ExecuteIfBound(); return; }
 			// A completion inside the call (before the caller can bind) is the bug: AwaitAll reports bDoneAtCreate.
@@ -512,7 +511,6 @@ void FPipelineMcpJobSpec::Define()
 
 		LatentIt("fires OnDone exactly once: 1 broadcast over 2 s after completion (success job and error job)", LongTimeout, [this](const FDoneDelegate& Done)
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			FString Pkg;
 			if (!ImportPkg(TEXT("import_test/tiny_text_embedding"), TEXT("Emb"), Pkg)) { Done.ExecuteIfBound(); return; }
 			const TSharedRef<FWatch> Ok = FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Pkg, TArray<FString>{ TEXT("hello world") }, TEXT(""), 3, 0.5f), TEXT("sample success"));
@@ -556,7 +554,6 @@ void FPipelineMcpJobSpec::Define()
 
 		LatentIt("8 jobs at once (mixed samples, benchmarks, errors) each complete once with independent results", LongTimeout, [this](const FDoneDelegate& Done)
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			FString Emb, Cls;
 			if (!ImportPkg(TEXT("import_test/tiny_text_embedding"), TEXT("Emb"), Emb)) { Done.ExecuteIfBound(); return; }
 			if (!ImportPkg(TEXT("import_test/tiny_text_classification"), TEXT("Cls"), Cls)) { Done.ExecuteIfBound(); return; }
@@ -614,7 +611,8 @@ void FPipelineMcpJobSpec::Define()
 
 		It("returns nullptr and logs a Warning when BenchmarkModelPackage / RunPipelineSample are called off the game thread", [this]()
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+			AddExpectedMessage(TEXT("BenchmarkModelPackage must be called on the game thread; returning nullptr."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+			AddExpectedMessage(TEXT("RunPipelineSample must be called on the game thread; returning nullptr."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			const TArray<TPair<FString, TFunction<FString()>>> Cases = {
 				{ TEXT("BenchmarkModelPackage"), []() { return FString(UPipelineMcpLibrary::BenchmarkModelPackage(TEXT("/Game/Nope.Nope"), 3, TEXT("cpu"), TArray<FString>(), TEXT("")) ? TEXT("object") : TEXT("null")); } },
 				{ TEXT("RunPipelineSample"), []() { return FString(UPipelineMcpLibrary::RunPipelineSample(TEXT("/Game/Nope.Nope"), TArray<FString>{ TEXT("x") }, TEXT(""), 1, 0.5f) ? TEXT("object") : TEXT("null")); } },
@@ -959,7 +957,6 @@ void FPipelineMcpJobSpec::Define()
 
 		LatentIt("devices 'both': CPU entry then GPU entry; GPU available true (REQUIRE_GPU) or a clean available:false", LongTimeout, [this](const FDoneDelegate& Done)
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			FString PkgPath;
 			if (!ImportPkg(TEXT("import_test/tiny_text_embedding"), TEXT("Emb"), PkgPath)) { Done.ExecuteIfBound(); return; }
 			const TSharedRef<FWatch> W = FWatch::Make(UPipelineMcpLibrary::BenchmarkModelPackage(PkgPath, 3, TEXT("Both"), TArray<FString>(), TEXT("")), TEXT("bench both"));
@@ -1071,7 +1068,6 @@ void FPipelineMcpJobSpec::Define()
 
 		LatentIt("errors: missing package, Runs 0 / 1001 / -5, devices 'tpu', 65 texts, Image not a texture - failed jobs with the exact messages", LongTimeout, [this](const FDoneDelegate& Done)
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			FString Emb, Img;
 			if (!ImportPkg(TEXT("import_test/tiny_text_embedding"), TEXT("Emb"), Emb)) { Done.ExecuteIfBound(); return; }
 			if (!ImportPkg(TEXT("import_test/tiny_image_classification"), TEXT("ImgCls"), Img)) { Done.ExecuteIfBound(); return; }
@@ -1273,7 +1269,6 @@ void FPipelineMcpJobSpec::Define()
 
 		LatentIt("image tasks with a texture asset: success with image/top or detections structure, or a '<EPipelineError>: <message>' failure", LongTimeout, [this](const FDoneDelegate& Done)
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			FString Cls, Det;
 			if (!ImportPkg(TEXT("import_test/tiny_image_classification"), TEXT("ImgCls"), Cls)) { Done.ExecuteIfBound(); return; }
 			if (!ImportPkg(TEXT("import_test/tiny_object_detection"), TEXT("ImgDet"), Det)) { Done.ExecuteIfBound(); return; }
@@ -1337,7 +1332,6 @@ void FPipelineMcpJobSpec::Define()
 
 		LatentIt("errors: missing package, missing inputs per task, 65 texts, score_threshold 1.5, bad image - failed jobs with the exact messages", LongTimeout, [this](const FDoneDelegate& Done)
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			FString Emb, Cls, ImgCls, Det;
 			if (!ImportPkg(TEXT("import_test/tiny_text_embedding"), TEXT("Emb"), Emb)) { Done.ExecuteIfBound(); return; }
 			if (!ImportPkg(TEXT("import_test/tiny_text_classification"), TEXT("Cls"), Cls)) { Done.ExecuteIfBound(); return; }

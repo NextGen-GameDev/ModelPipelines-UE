@@ -304,7 +304,7 @@ namespace TextEmbeddingSpecPrivate
 
 	static void ExpectOneWarning(FAutomationTestBase& T)
 	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+		T.AddExpectedMessage(TEXT("UTextEmbeddingPipeline::EmbedAsync: null callback, nothing runs"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	}
 
 	static void CheckParityResult(FAutomationTestBase& T, const FFixture& F, FCall& C, EPipelineDevice ExpectedDevice, const TCHAR* Label)
@@ -555,6 +555,8 @@ void FTextEmbeddingPipelineSpec::Define()
 		It("InvalidTokenizerJson", [this]()
 		{
 			// Garbage tokenizer text must surface as PreprocessFailed (10) from OnInitialize, with a message, and no pipeline.
+			AddExpectedMessage(TEXT("^InitializeTokenizerFromJson: failed to parse tokenizer JSON"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1); // the LogTokenizers line (anchored: the pipeline line below quotes it mid-message)
+			AddExpectedMessage(TEXT("UTextEmbeddingPipeline: tokenizer of package"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			FFixture F;
 			if (!MakeFixture(*this, MiniSlug, EPipelineDevice::CPU, F, false, [](UPipelineModelPackage& P) { P.TokenizerJson = TEXT("{not json"); })) { return; }
 			FPipelineResult R;
@@ -697,6 +699,7 @@ void FTextEmbeddingPipelineSpec::Define()
 		{
 			// Backend whose GPU runtime name does not exist + PreferredDevice GPU: must run on CPU (Result.Device == CPU)
 			// with correct results, not fail and not claim GPU.
+			AddExpectedMessage(TEXT("GPU unavailable for this model, falling back to CPU: GPU runtime '[^']*' is not registered"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 			const TSharedRef<FFixture> F = MakeShared<FFixture>();
 			if (!MakeFixture(*this, MiniSlug, EPipelineDevice::GPU, *F, false)) { Done.ExecuteIfBound(); return; }
 			FPipelineNNEBackendConfig Cfg;

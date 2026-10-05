@@ -220,7 +220,7 @@ namespace TextClassSpecPrivate
 
 	static void ExpectOneWarning(FAutomationTestBase& T)
 	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+		T.AddExpectedMessage(TEXT("UTextClassificationPipeline::ClassifyAsync: null callback, nothing runs"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	}
 
 	/**

@@ -22,10 +22,15 @@ namespace PipelineLibrarySpecPrivate
 
 	static bool NearF(float A, double E) { return FMath::Abs((double)A - E) <= 1e-6 * FMath::Max(1.0, FMath::Abs(E)); }
 
-	/** The brief gives no Warning wording, so any single Warning-level message satisfies the expectation. */
-	static void ExpectOneWarning(FAutomationTestBase& T)
+	/** Expect exactly one Warning matching the product's wording (regex); a catch-all pattern would also swallow failed assertions. */
+	static void ExpectOneWarning(FAutomationTestBase& T, const TCHAR* Regex)
 	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+		T.AddExpectedMessage(Regex, ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	}
+
+	static void ExpectCosineMismatchWarning(FAutomationTestBase& T)
+	{
+		ExpectOneWarning(T, TEXT("CosineSimilarity: embeddings of length [0-9]+ and [0-9]+ cannot be compared; returning [0-9]+"));
 	}
 
 	static FString Summarize(const TArray<FPipelineSimilarityMatch>& R)
@@ -60,14 +65,14 @@ void FPipelineLibrarySpec::Define()
 
 		It("length mismatch gives 0 with exactly one Warning", [this]()
 		{
-			ExpectOneWarning(*this);
+			ExpectCosineMismatchWarning(*this);
 			const float S = UPipelineLibrary::CosineSimilarity(Emb({1.f, 0.f}), Emb({1.f, 0.f, 0.f}));
 			TestEqual("score", S, 0.f);
 		});
 
 		It("empty embedding gives 0 with exactly one Warning", [this]()
 		{
-			ExpectOneWarning(*this);
+			ExpectCosineMismatchWarning(*this);
 			const float S = UPipelineLibrary::CosineSimilarity(FPipelineEmbedding(), Emb({1.f, 0.f}));
 			TestEqual("score", S, 0.f);
 		});
@@ -116,8 +121,7 @@ void FPipelineLibrarySpec::Define()
 
 		It("skips entries of a different length with one Warning", [this]()
 		{
-			// Brief: "one Warning naming the count" but no wording, so only the Warning count is checked.
-			ExpectOneWarning(*this);
+			ExpectOneWarning(*this, TEXT("TopKSimilar: skipped [0-9]+ corpus entries whose length differs from the query's \\([0-9]+\\)"));
 			const TArray<FPipelineEmbedding> Corpus = {Emb({0.f, 1.f}), Emb({1.f, 0.f, 0.f}), Emb({1.f, 0.f}), Emb({1.f, 1.f})};
 			const TArray<FPipelineSimilarityMatch> R = UPipelineLibrary::TopKSimilar(Emb({1.f, 0.f}), Corpus, 10);
 			TestEqual("usable entries only", R.Num(), 3);

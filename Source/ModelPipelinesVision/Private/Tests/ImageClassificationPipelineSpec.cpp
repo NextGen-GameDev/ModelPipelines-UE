@@ -296,7 +296,7 @@ namespace ImageClassSpecPrivate
 
 	static void ExpectOneWarning(FAutomationTestBase& T)
 	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+		T.AddExpectedMessage(TEXT("UImageClassificationPipeline::ClassifyImageAsync: null callback, nothing runs"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	}
 
 	static int32 ExpectedTopKCount(int32 TopK, int32 NumLabels)

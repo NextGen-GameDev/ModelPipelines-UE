@@ -238,9 +238,14 @@ namespace TextAsyncSpecPrivate
 		R->bInsideActivate = false;
 	}
 
-	static void ExpectOneWarning(FAutomationTestBase& T)
+	static void ExpectNullPipelineWarning(FAutomationTestBase& T, const FKind& K)
 	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+		T.AddExpectedMessage(FString::Printf(TEXT("%s: Pipeline is null"), K.bEmbed ? TEXT("Embed Texts") : TEXT("Classify Texts")), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+	}
+
+	static void ExpectSecondActivateWarning(FAutomationTestBase& T, const FKind& K)
+	{
+		T.AddExpectedMessage(FString::Printf(TEXT("%s: Activate called again on an action that was already activated or cancelled; ignored"), K.bEmbed ? TEXT("Embed Texts") : TEXT("Classify Texts")), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 	}
 
 	// ---------------------------------------------------------------- checks
@@ -379,7 +384,7 @@ namespace TextAsyncSpecPrivate
 		// Null pipeline: failure, InvalidArgument, "Pipeline is null", empty output, delivered later (never inside Activate).
 		// A node that delivered synchronously would fire inside Activate and break latent-node semantics in Blueprints.
 		const TStrongObjectPtr<UTextAsyncActionTestReceiver> R = NewReceiver();
-		ExpectOneWarning(*T);
+		ExpectNullPipelineWarning(*T, K);
 		UCancellableAsyncAction* A = NewAction(K, nullptr, R.Get(), ValidTexts());
 		if (!T->TestNotNull(TEXT("factory never fails, even with a null pipeline"), A)) { Done.ExecuteIfBound(); return; }
 		const TStrongObjectPtr<UCancellableAsyncAction> Hold(A);
@@ -401,7 +406,7 @@ namespace TextAsyncSpecPrivate
 	{
 		// The null-pipeline failure is also deferred, so Cancel() right after Activate must suppress it.
 		const TStrongObjectPtr<UTextAsyncActionTestReceiver> R = NewReceiver();
-		ExpectOneWarning(*T);
+		ExpectNullPipelineWarning(*T, K);
 		UCancellableAsyncAction* A = NewAction(K, nullptr, R.Get(), ValidTexts());
 		if (!T->TestNotNull(TEXT("factory returned an action"), A)) { Done.ExecuteIfBound(); return; }
 		Activate(R.Get(), A);
@@ -463,7 +468,7 @@ namespace TextAsyncSpecPrivate
 		const TStrongObjectPtr<UTextAsyncActionTestReceiver> R = NewReceiver();
 		UCancellableAsyncAction* A = NewAction(K, F->Pipe(), R.Get(), TextsFor(K, *F));
 		if (!T->TestNotNull(TEXT("factory returned an action"), A)) { Done.ExecuteIfBound(); return; }
-		ExpectOneWarning(*T);
+		ExpectSecondActivateWarning(*T, K);
 		Activate(R.Get(), A);
 		Activate(R.Get(), A);
 		WaitSettled(T, [R]() { return R->Total() > 0; }, TEXT("OnSuccess never fired"), Done, [T, K, R, F]()

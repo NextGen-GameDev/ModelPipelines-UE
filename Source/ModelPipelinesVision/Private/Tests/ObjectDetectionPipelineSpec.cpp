@@ -359,7 +359,7 @@ namespace ObjDetSpecPrivate
 
 	static void ExpectOneWarning(FAutomationTestBase& T)
 	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+		T.AddExpectedMessage(TEXT("UObjectDetectionPipeline::DetectImageAsync: null callback, nothing runs"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	}
 
 	/**

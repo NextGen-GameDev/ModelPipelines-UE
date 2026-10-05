@@ -346,9 +346,14 @@ namespace VisionAsyncSpecPrivate
 		R->bInsideActivate = false;
 	}
 
-	static void ExpectOneWarning(FAutomationTestBase& T)
+	static void ExpectNullPipelineWarning(FAutomationTestBase& T, const FKind& K)
 	{
-		T.AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+		T.AddExpectedMessage(FString::Printf(TEXT("%s: Pipeline is null"), K.bDetect ? TEXT("Detect Objects") : TEXT("Classify Image")), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
+	}
+
+	static void ExpectSecondActivateWarning(FAutomationTestBase& T, const FKind& K)
+	{
+		T.AddExpectedMessage(FString::Printf(TEXT("%s: Activate called again on an action that was already activated or cancelled; ignored"), K.bDetect ? TEXT("Detect Objects") : TEXT("Classify Image")), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 	}
 
 	// ---------------------------------------------------------------- checks
@@ -609,7 +614,7 @@ namespace VisionAsyncSpecPrivate
 		// A node that delivered synchronously would fire inside Activate and break latent-node semantics in Blueprints.
 		const TStrongObjectPtr<UVisionAsyncActionTestReceiver> R = NewReceiver();
 		const TStrongObjectPtr<UObject> Tex(UTexture2D::CreateTransient(4, 4, PF_B8G8R8A8));
-		ExpectOneWarning(*T);
+		ExpectNullPipelineWarning(*T, K);
 		UCancellableAsyncAction* A = NewAction(K, nullptr, Cast<UTexture>(Tex.Get()), R.Get());
 		if (!T->TestNotNull(TEXT("factory never fails, even with a null pipeline"), A)) { Done.ExecuteIfBound(); return; }
 		const TStrongObjectPtr<UCancellableAsyncAction> Hold(A);
@@ -634,7 +639,7 @@ namespace VisionAsyncSpecPrivate
 	{
 		// The null-pipeline failure is also deferred, so Cancel() right after Activate must suppress it.
 		const TStrongObjectPtr<UVisionAsyncActionTestReceiver> R = NewReceiver();
-		ExpectOneWarning(*T);
+		ExpectNullPipelineWarning(*T, K);
 		UCancellableAsyncAction* A = NewAction(K, nullptr, nullptr, R.Get());
 		if (!T->TestNotNull(TEXT("factory returned an action"), A)) { Done.ExecuteIfBound(); return; }
 		Activate(R.Get(), A);
@@ -683,7 +688,7 @@ namespace VisionAsyncSpecPrivate
 			const TStrongObjectPtr<UVisionAsyncActionTestReceiver> R = NewReceiver();
 			UCancellableAsyncAction* A = NewAction(K, F->Pipe(), Tex, R.Get());
 			if (!T->TestNotNull(TEXT("factory returned an action"), A)) { Done.ExecuteIfBound(); return; }
-			ExpectOneWarning(*T);
+			ExpectSecondActivateWarning(*T, K);
 			Activate(R.Get(), A);
 			Activate(R.Get(), A);
 			WaitSettled(T, [R]() { return R->Total() > 0; }, TEXT("no pin fired"), Done, [T, K, F, R, Exp]()

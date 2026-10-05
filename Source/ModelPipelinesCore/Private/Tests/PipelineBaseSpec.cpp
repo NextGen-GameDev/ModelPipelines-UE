@@ -421,16 +421,6 @@ namespace
 		}
 	}
 
-	void AddOrtLogExpectations(FAutomationTestBase& T)
-	{
-		const TCHAR* Patterns[] = {TEXT("ORT"), TEXT("NNE"), TEXT("ONNX"), TEXT("onnx"), TEXT("Cannot create"), TEXT("model data"), TEXT("unknown_op"),
-			TEXT("Unknown"), TEXT("Fatal error"), TEXT("falling back"), TEXT("ModelPipelines"), TEXT("Pipeline")};
-		for (const TCHAR* P : Patterns)
-		{
-			T.AddExpectedMessage(P, ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
-		}
-	}
-
 	bool ContainsNoCase(const FString& Hay, const TCHAR* Needle)
 	{
 		return Hay.Contains(Needle, ESearchCase::IgnoreCase);
@@ -738,7 +728,9 @@ void FPipelineBaseSpec::Define()
 
 		LatentIt("unknown_op model: ModelLoadFailed via Complete, Preprocess never called", LatentLimit, [this](const FDoneDelegate& Done)
 		{
-			AddOrtLogExpectations(*this);
+			// ORT rejects the model at session creation; NNERuntimeORT logs it at Error level (the expected failure under test).
+			AddExpectedMessage(TEXT("ONNX Runtime error 10: This is an invalid model[.] In Node.*No Op registered for ModelPipelinesNotARealOp"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 1);
+			AddExpectedMessage(TEXT("Session creation failed."), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 1, false);
 			if (!Fx.LoadGolden(*this) || !Fx.MakePackage(*this, UnknownOpFolder, EPipelineTask::TextClassification, EPipelineDevice::CPU)) { Done.ExecuteIfBound(); return; }
 			UPipelineBaseTestPipeline* P = Fx.NewPipeline();
 			const FPipelineResult Init = P->InitializeFromPackage(Fx.Pkg.Get());
@@ -841,7 +833,7 @@ void FPipelineBaseSpec::Define()
 
 		LatentIt("PreferredDevice GPU with a bogus GPU runtime name: Initialize ok, first call runs on CPU with golden logits", LatentLimit, [this](const FDoneDelegate& Done)
 		{
-			AddExpectedMessage(TEXT("."), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1, false); // the fallback warning, whatever its wording
+			AddExpectedMessage(TEXT("GPU unavailable for this model, falling back to CPU: GPU runtime '[^']*' is not registered"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1); // the fallback warning, once (one call)
 			if (!Fx.LoadGolden(*this) || !Fx.MakePackage(*this, ClassifierFolder, EPipelineTask::TextClassification, EPipelineDevice::GPU)) { Done.ExecuteIfBound(); return; }
 			FPipelineNNEBackendConfig Cfg;
 			Cfg.GpuRuntimeName = TEXT("NoSuchRuntime");

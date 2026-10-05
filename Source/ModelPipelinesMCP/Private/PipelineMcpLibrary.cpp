@@ -56,10 +56,10 @@ namespace PipelineMcpLibraryPrivate
 		FString ObjectPath;
 		UObject* Loaded = nullptr;
 		bool bOnDisk = false;
-		/** Class known to the asset registry (empty when it has no entry). */
-		FTopLevelAssetPath RegistryClass;
+		/** Asset registry entry (invalid when it has none). */
+		FAssetData RegistryData;
 
-		bool Exists() const { return Loaded != nullptr || bOnDisk || !RegistryClass.IsNull(); }
+		bool Exists() const { return Loaded != nullptr || bOnDisk || RegistryData.IsValid(); }
 	};
 
 	static FTarget MakeTarget(const FString& Dest, const FString& Name)
@@ -156,11 +156,7 @@ namespace PipelineMcpLibraryPrivate
 			T->bOnDisk = FPackageName::DoesPackageExist(T->LongPackageName);
 			if (Registry)
 			{
-				const FAssetData Data = Registry->GetAssetByObjectPath(FSoftObjectPath(T->ObjectPath));
-				if (Data.IsValid())
-				{
-					T->RegistryClass = Data.AssetClassPath;
-				}
+				T->RegistryData = Registry->GetAssetByObjectPath(FSoftObjectPath(T->ObjectPath));
 			}
 			UPackage* FoundPackage = FindPackage(nullptr, *T->LongPackageName);
 			if (FoundPackage && !IsValid(FoundPackage))
@@ -179,8 +175,9 @@ namespace PipelineMcpLibraryPrivate
 				{
 					return T.Loaded->IsA(Class);
 				}
-				// On disk but not loaded: trust the registry when it knows the asset; otherwise the importer decides.
-				return T.RegistryClass.IsNull() || T.RegistryClass == Class->GetClassPathName();
+				// On disk but not loaded: trust the registry when it knows the asset (subclasses accepted, like the importer's
+				// Cast<>); otherwise the importer decides.
+				return !T.RegistryData.IsValid() || T.RegistryData.IsInstanceOf(Class);
 			};
 			const bool bCanOverwrite = Plan.Package.Exists() && Plan.Model.Exists()
 				&& IsClass(Plan.Package, UPipelineModelPackage::StaticClass()) && IsClass(Plan.Model, UNNEModelData::StaticClass());
@@ -243,6 +240,9 @@ FString UPipelineMcpLibrary::ListModelPackages(const FString& Path, bool bRecurs
 	TArray<FListedPackage> Listed;
 	if (IAssetRegistry* Registry = IAssetRegistry::Get())
 	{
+		// Right after editor start the registry may still be gathering; scan the validated folder so on-disk packages are listed.
+		Registry->ScanPathsSynchronous({ Folder }, /*bForceRescan*/ false);
+
 		FARFilter Filter;
 		Filter.PackagePaths.Add(FName(*Folder));
 		Filter.ClassPaths.Add(UPipelineModelPackage::StaticClass()->GetClassPathName());
@@ -315,17 +315,13 @@ FString UPipelineMcpLibrary::ImportModelFolder(const FString& SourceFolder, cons
 
 		bool bNeedsConfirm = false;
 		FString Message;
-		if (!Report.IsValid() && !Plan.bCannotOverwrite)
+		if (!Report.IsValid())
 		{
 			Message = MsgCannotImport;
 		}
 		else if (Plan.bExists && !bOverwriteExisting)
 		{
 			Message = MsgAssetsExist;
-		}
-		else if (!Report.IsValid())
-		{
-			Message = MsgCannotImport;
 		}
 		else
 		{
@@ -335,17 +331,11 @@ FString UPipelineMcpLibrary::ImportModelFolder(const FString& SourceFolder, cons
 
 		Root->SetBoolField(TEXT("success"), false);
 		Root->SetBoolField(TEXT("needs_confirm"), bNeedsConfirm);
-		if (Plan.bNamesValid)
-		{
-			TSharedRef<FJsonObject> WouldCreate = MakeShared<FJsonObject>();
-			WouldCreate->SetStringField(TEXT("package"), Plan.Package.ObjectPath);
-			WouldCreate->SetStringField(TEXT("model"), Plan.Model.ObjectPath);
-			Root->SetObjectField(TEXT("would_create"), WouldCreate);
-		}
-		else
-		{
-			Root->SetField(TEXT("would_create"), MakeShared<FJsonValueNull>());
-		}
+		// Always an object; empty strings when the destination or name is invalid.
+		TSharedRef<FJsonObject> WouldCreate = MakeShared<FJsonObject>();
+		WouldCreate->SetStringField(TEXT("package"), Plan.bNamesValid ? Plan.Package.ObjectPath : FString());
+		WouldCreate->SetStringField(TEXT("model"), Plan.bNamesValid ? Plan.Model.ObjectPath : FString());
+		Root->SetObjectField(TEXT("would_create"), WouldCreate);
 		Root->SetBoolField(TEXT("exists"), Plan.bExists);
 		Root->SetStringField(TEXT("task"), TaskText);
 		Root->SetObjectField(TEXT("report"), PipelineMcpJson::ReportToJson(Report));

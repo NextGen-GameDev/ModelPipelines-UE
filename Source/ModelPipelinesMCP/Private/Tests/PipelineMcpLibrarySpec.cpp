@@ -857,7 +857,7 @@ void FPipelineMcpLibrarySpec::Define()
 	{
 		It("round-trips a non-ASCII asset_name through the JSON", [this]()
 		{
-			AddExpectedMessage(TEXT("tiny_text_classification"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+			AddExpectedMessage(TEXT("tiny_text_classification|package was marked as deleted in editor"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 			FString Folder;
 			if (!RequireFolder(TEXT("tiny_text_classification"), Folder)) { return; }
 			const FString Name = TEXT("\u6a21\u578b");

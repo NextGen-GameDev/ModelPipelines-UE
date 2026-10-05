@@ -2,6 +2,7 @@
 
 #include "PipelineMcpRun.h"
 
+#include "Containers/Ticker.h"
 #include "Engine/Texture.h"
 #include "HAL/PlatformMemory.h"
 #include "HAL/PlatformTime.h"
@@ -159,8 +160,85 @@ namespace PipelineMcpRunPrivate
 	/** Base of the two runners: weak job access, pipeline creation and the keep-alive bookkeeping. */
 	class FRunnerBase : public FPipelineMcpRunner
 	{
+	public:
+		virtual ~FRunnerBase() override
+		{
+			// The job released its runner (ended or cancelled at shutdown): stop any texture wait.
+			RemoveTextureWait();
+		}
+
 	protected:
 		TWeakObjectPtr<UPipelineMcpJob> WeakJob;
+
+		/** Poll interval and limit of the texture-compilation wait (C38 amendment). */
+		static constexpr float TextureWaitInterval = 0.1f;
+		static constexpr double TextureWaitLimitSeconds = 60.0;
+
+		/** Pending texture-compilation wait (empty when none). */
+		FTSTicker::FDelegateHandle TextureWaitHandle;
+
+		void RemoveTextureWait()
+		{
+			if (TextureWaitHandle.IsValid())
+			{
+				FTSTicker::RemoveTicker(TextureWaitHandle);
+				TextureWaitHandle.Reset();
+			}
+		}
+
+		/**
+		 * Game thread. Runs Continue once Tex has finished its async editor build (directly when it is not compiling),
+		 * polling from the core ticker so the game thread is never blocked. Fails the job after TextureWaitLimitSeconds.
+		 * Continue only runs while the job is live and the runner exists; it must not capture the runner strongly.
+		 */
+		void WaitForTexture(UTexture* Tex, TUniqueFunction<void()> Continue)
+		{
+			if (!Tex || !Tex->IsCompiling())
+			{
+				Continue();
+				return;
+			}
+			RemoveTextureWait();
+			const TWeakPtr<FPipelineMcpRunner> WeakSelf = AsShared();
+			const TWeakObjectPtr<UTexture> WeakTex(Tex);
+			const FString TexName = Tex->GetName();
+			const double WaitStart = FPlatformTime::Seconds();
+			TextureWaitHandle = FTSTicker::GetCoreTicker().AddTicker(TEXT("PipelineMcpTextureWait"), TextureWaitInterval,
+				[WeakSelf, WeakTex, TexName, WaitStart, Continue = MoveTemp(Continue)](float) mutable -> bool
+				{
+					const TSharedPtr<FPipelineMcpRunner> Pinned = WeakSelf.Pin();
+					if (!Pinned.IsValid())
+					{
+						return false;
+					}
+					FRunnerBase* Self = static_cast<FRunnerBase*>(Pinned.Get());
+					if (!Self->LiveJob())
+					{
+						Self->TextureWaitHandle.Reset();
+						return false;
+					}
+					UTexture* T = WeakTex.Get();
+					if (!T)
+					{
+						Self->TextureWaitHandle.Reset();
+						Self->FailJob(TEXT("internal: the texture was released while waiting for it to compile"));
+						return false;
+					}
+					if (T->IsCompiling())
+					{
+						if (FPlatformTime::Seconds() - WaitStart >= TextureWaitLimitSeconds)
+						{
+							Self->TextureWaitHandle.Reset();
+							Self->FailJob(FString::Printf(TEXT("texture '%s' is still compiling after %.0f s"), *TexName, TextureWaitLimitSeconds));
+							return false;
+						}
+						return true;
+					}
+					Self->TextureWaitHandle.Reset();
+					Continue();
+					return false;
+				});
+		}
 
 		/** The job while it is still running; nullptr once it ended (late callbacks are dropped). */
 		UPipelineMcpJob* LiveJob() const
@@ -298,7 +376,8 @@ namespace PipelineMcpRunPrivate
 			Root->SetNumberField(TEXT("runs"), Runs);
 			Root->SetStringField(TEXT("input"), InputDesc);
 			DeviceIndex = 0;
-			StartDevice();
+			// A just-imported texture may still be compiling: wait once, before the first device (not timed).
+			WaitForTexture(Texture.Get(), [this]() { StartDevice(); });
 		}
 
 	private:
@@ -633,6 +712,34 @@ namespace PipelineMcpRunPrivate
 			const int32 NumLabels = FMath::Max(1, Pkg->Labels.Num());
 			const int32 K = FMath::Clamp(TopK, 1, NumLabels);
 
+			// Text tasks have no Texture, so they never wait. P is kept alive by the job.
+			Pipeline = P;
+			WaitForTexture(Texture.Get(), [this, K]() { IssueCall(K); });
+		}
+
+	private:
+		FString PackageArg;
+		TArray<FString> Texts;
+		FString ImageArg;
+		int32 TopK = 1;
+		float ScoreThreshold = 0.5f;
+		EPipelineTask Task = EPipelineTask::None;
+		TWeakObjectPtr<UTexture> Texture;
+		TWeakObjectPtr<UPipelineBase> Pipeline;
+
+		/** Issues the single pipeline call (after any texture wait). */
+		void IssueCall(int32 K)
+		{
+			if (!LiveJob())
+			{
+				return;
+			}
+			UPipelineBase* P = Pipeline.Get();
+			if (!P)
+			{
+				FailJob(TEXT("internal: the pipeline was released before the call"));
+				return;
+			}
 			const TSharedRef<FSampleRunner> Self = StaticCastSharedRef<FSampleRunner>(AsShared());
 			switch (Task)
 			{
@@ -657,15 +764,6 @@ namespace PipelineMcpRunPrivate
 				break;
 			}
 		}
-
-	private:
-		FString PackageArg;
-		TArray<FString> Texts;
-		FString ImageArg;
-		int32 TopK = 1;
-		float ScoreThreshold = 0.5f;
-		EPipelineTask Task = EPipelineTask::None;
-		TWeakObjectPtr<UTexture> Texture;
 
 		TSharedRef<FJsonObject> MakeRoot(const FPipelineResult& R) const
 		{

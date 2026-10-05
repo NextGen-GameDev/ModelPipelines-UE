@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+﻿// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -27,7 +27,12 @@
 #include "UObject/UObjectGlobals.h"
 #include "PipelineModelPackage.h"
 #include "PipelineModelImporter.h"
+#include "Engine/Texture2D.h"
+#include "Math/RandomStream.h"
+#include "TextureCompiler.h"
+#include "Misc/App.h"
 #include "PipelineMcpJob.h"
+#include "PipelineMcpRun.h"
 #include "PipelineMcpLibrary.h"
 #include "PipelineMcpTestReceiver.h"
 
@@ -197,6 +202,81 @@ namespace PipelineMcpJobSpecPrivate
 		bool Ok() const { return Recv->Successes.Num() > 0 && Recv->Successes[0]; }
 		FString Json() const { return Recv->Jsons.Num() > 0 ? Recv->Jsons[0] : FString(); }
 	};
+}
+
+/** Helpers of Describe("TextureWait") (WP6.6). */
+namespace PipelineMcpJobSpecTexWait
+{
+	/**
+	 * A transient texture whose async editor build is in flight: 8192x8192 random BGRA8 source (random, so the derived data cache
+	 * cannot hit) compressed as BC7. Pattern per Texture.h:36-40 (PreEditChange / change / PostEditChange); Source.Init must be inside
+	 * PreEdit/PostEdit (Texture.h:216). UTexture::IsCompiling() is Texture.h:2045 (IsDefaultTexture): for UTexture2D it is true until
+	 * the async work is complete (Texture2D.cpp:530).
+	 *
+	 * Only works with a renderer. UTexture::CachePlatformData does nothing when FApp::CanEverRender() is false
+	 * (TextureDerivedData.cpp:3668), and CanEverRender() is false under -nullrhi (App.h:405): no async task is created, the
+	 * texture is never compiling. MakeCase (below) skips loudly in that case.
+	 * The DDC2 build does not run on the texture thread pool and a 4096x4096 BC7 build takes only about 0.1-0.3 s, so a
+	 * smaller texture can finish before the check; 8192x8192 leaves a wide margin.
+	 */
+	static UTexture2D* MakeBigTexture()
+	{
+		const int32 Size = 8192;
+		// Finish what earlier tests left running so this build does not compete with them.
+		FTextureCompilingManager::Get().FinishAllCompilation();
+		UTexture2D* Tex = NewObject<UTexture2D>(GetTransientPackage(),
+			MakeUniqueObjectName(GetTransientPackage(), UTexture2D::StaticClass(), TEXT("T_McpWait")), RF_Transient);
+		TArray<uint8> Pixels;
+		Pixels.SetNumUninitialized((int64)Size * Size * 4);
+		// Unique per texture and per run (a fixed seed repeats the data, the derived data cache then serves a finished build).
+		// xorshift32 over 4-byte words: no flat blocks for BC7 to shortcut, and fast enough to fill 256 MB.
+		uint32 State = GetTypeHash(FGuid::NewGuid()) | 1u;
+		uint32* Words = reinterpret_cast<uint32*>(Pixels.GetData());
+		for (int64 I = 0, N = (int64)Size * Size; I < N; ++I)
+		{
+			State ^= State << 13; State ^= State >> 17; State ^= State << 5;
+			Words[I] = State;
+		}
+		Tex->PreEditChange(nullptr);
+		Tex->Source.Init(Size, Size, 1, 1, TSF_BGRA8, Pixels.GetData());
+		Tex->CompressionSettings = TC_BC7;
+		Tex->SRGB = true;
+		Tex->PostEditChange();
+		return Tex;
+	}
+	struct FTexCase
+	{
+		TWeakObjectPtr<UTexture2D> Tex;
+		FString Path;
+		bool IsCompiling() const { const UTexture2D* T = Tex.Get(); return T && T->IsCompiling(); }
+	};
+
+	/** Sampled from a core ticker the first tick after OnDone fired (the texture never starts compiling again). */
+	struct FDoneSample
+	{
+		bool bSampled = false;
+		bool bTextureCompiling = true;
+		int32 TicksUntilDone = -1;
+	};
+
+	static TSharedRef<FDoneSample> SampleAtDone(const TSharedRef<PipelineMcpJobSpecPrivate::FWatch>& W, const TSharedPtr<FTexCase>& T)
+	{
+		TSharedRef<FDoneSample> S = MakeShared<FDoneSample>();
+		TSharedRef<int32> Ticks = MakeShared<int32>(0);
+		FTSTicker::GetCoreTicker().AddTicker(TEXT("PipelineMcpJobSpecTexSample"), 0.0f, [W, T, S, Ticks](float)
+		{
+			++(*Ticks);
+			if (W->Recv->Count >= 1)
+			{
+				S->bSampled = true;
+				S->bTextureCompiling = T->IsCompiling();
+				S->TicksUntilDone = *Ticks;
+				return false;
+			}
+			return *Ticks < 20000; // far beyond any test timeout, only a leak guard
+		});
+		return S;
+	}
 }
 
 BEGIN_DEFINE_SPEC(FPipelineMcpJobSpec, "Pipelines.MCP.Library",
@@ -549,6 +629,249 @@ void FPipelineMcpJobSpec::Define()
 				}
 				TestEqual(*FString::Printf(TEXT("%s off the game thread; got %s, expected null"), *C.Key, *Out), Out, FString(TEXT("null")));
 			}
+		});
+
+		// -----------------------------------------------------------------------------------------------------------------
+		// WP6.6: image jobs wait (ticker, no blocking) for a texture whose async editor build is still running.
+		Describe("TextureWait", [this, LongTimeout]()
+		{
+			using namespace PipelineMcpJobSpecTexWait;
+
+			// Builds the compiling texture and asserts the setup worked (a setup that produced a finished texture fails loudly, it
+			// never passes vacuously). Call it right before the job call: import the packages first.
+			auto MakeCase = [this]() -> TSharedPtr<FTexCase>
+			{
+				if (!FApp::CanEverRender())
+				{
+					// -nullrhi: no texture build can start, so there is no compiling texture to wait for (see MakeBigTexture). A test that went
+					// on would not test the wait, so it stops here. Not silent: Info always, an error when the run demands it.
+					const FString Msg = TEXT("TextureWait SKIPPED: FApp::CanEverRender() is false (-nullrhi), so no texture can be compiling. Run without -nullrhi to execute it (set MODELPIPELINES_REQUIRE_TEXTURE_WAIT=1 to make this skip an error).");
+					if (FPlatformMisc::GetEnvironmentVariable(TEXT("MODELPIPELINES_REQUIRE_TEXTURE_WAIT")) == TEXT("1"))
+					{
+						AddError(Msg);
+					}
+					else
+					{
+						AddInfo(Msg);
+					}
+					return nullptr;
+				}
+				UTexture2D* Tex = MakeBigTexture();
+				if (!Tex)
+				{
+					AddError(TEXT("test setup: NewObject<UTexture2D> returned null"));
+					return nullptr;
+				}
+				Keep.Add(TStrongObjectPtr<UObject>(Tex));
+				TSharedRef<FTexCase> C = MakeShared<FTexCase>();
+				C->Tex = Tex;
+				C->Path = Tex->GetPathName();
+				if (!Tex->IsCompiling())
+				{
+					AddError(FString::Printf(TEXT("test setup: texture '%s' is not compiling right after Source.Init + PostEditChange (did the build finish inside PostEditChange, or is Editor.AsyncTextureCompilation 0?); the TextureWait tests need a compiling texture"), *C->Path));
+					return nullptr;
+				}
+				return C;
+			};
+			// The job's own error string for a texture that never finished is "texture '<name>' is still compiling after 60 s";
+			// the pre-fix error is "...is still compiling; retry when it has finished". Both contain this text.
+			auto NoStill = [this](const TSharedRef<FWatch>& W)
+			{
+				TestFalse(*FString::Printf(TEXT("[%s] result contains 'still compiling' (the job should have waited for the texture, not reported it); got %s"), *W->Label, *W->Json().Left(500)),
+					W->Json().Contains(TEXT("still compiling")));
+			};
+
+			auto CheckSample = [this, NoStill](const TSharedRef<FWatch>& W, const TSharedRef<FDoneSample>& S)
+			{
+				NoStill(W);
+				TestTrue(*FString::Printf(TEXT("[%s] the post-OnDone sampler ran"), *W->Label), S->bSampled);
+				// A job that did not wait (or gave up) completes while the build is still running.
+				TestFalse(*FString::Printf(TEXT("[%s] texture IsCompiling() at OnDone; got true, expected false (the job must finish only after the texture finished)"), *W->Label), S->bTextureCompiling);
+			};
+
+			LatentIt("1 sample ImageClassification on a compiling texture: one OnDone, texture finished by then, no 'still compiling' error", LongTimeout, [this, MakeCase, CheckSample](const FDoneDelegate& Done)
+			{
+				FString Pkg;
+				if (!ImportPkg(TEXT("import_test/tiny_image_classification"), TEXT("ImgCls"), Pkg)) { Done.ExecuteIfBound(); return; }
+				const TSharedPtr<FTexCase> T = MakeCase();
+				if (!T.IsValid()) { Done.ExecuteIfBound(); return; }
+				// Success, or (under -nullrhi) the reader's no-RHI PreprocessFailed error are both fine: only the wait is under test.
+				const TSharedRef<FWatch> W = FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Pkg, TArray<FString>(), T->Path, 3, 0.5f), TEXT("sample cls compiling"));
+				const TSharedRef<FDoneSample> S = SampleAtDone(W, T);
+				AwaitAll({ W }, Done, [W, S, CheckSample]()
+				{
+					CheckSample(W, S); // AwaitAll already checked: exactly one broadcast, game thread, not done at create
+				});
+			});
+
+			LatentIt("2 benchmark (cpu, Runs 2) on a compiling texture: input 'image <path>', CPU entry has no 'still compiling' error", LongTimeout, [this, MakeCase, CheckSample](const FDoneDelegate& Done)
+			{
+				FString Pkg;
+				if (!ImportPkg(TEXT("import_test/tiny_image_classification"), TEXT("ImgCls"), Pkg)) { Done.ExecuteIfBound(); return; }
+				const TSharedPtr<FTexCase> T = MakeCase();
+				if (!T.IsValid()) { Done.ExecuteIfBound(); return; }
+				const TSharedRef<FWatch> W = FWatch::Make(UPipelineMcpLibrary::BenchmarkModelPackage(Pkg, 2, TEXT("cpu"), TArray<FString>(), T->Path), TEXT("bench cls compiling"));
+				const TSharedRef<FDoneSample> S = SampleAtDone(W, T);
+				AwaitAll({ W }, Done, [this, W, S, T, CheckSample]()
+				{
+					CheckSample(W, S);
+					const FString Js = W->Json().Left(1200);
+					TestTrue(*FString::Printf(TEXT("benchmark job succeeded (a per-device error entry is still a success); got %s"), *Js), W->Ok());
+					const TSharedPtr<FJsonObject> J = Parse(W->Json(), W->Label);
+					TestEqual(*FString::Printf(TEXT("input; got %s"), *Js), GetStr(J, TEXT("input")), FString(TEXT("image ")) + T->Path);
+					const TSharedPtr<FJsonObject> Cpu = FindDevice(J, TEXT("CPU"));
+					if (TestNotNull(*FString::Printf(TEXT("CPU entry; got %s"), *Js), Cpu.Get()))
+					{
+						TestFalse(*FString::Printf(TEXT("CPU entry error contains 'still compiling'; got '%s'"), *GetStr(Cpu, TEXT("error"))),
+							GetStr(Cpu, TEXT("error")).Contains(TEXT("still compiling")));
+					}
+				});
+			});
+
+			LatentIt("3 sample ObjectDetection (score_threshold 0.5) on a compiling texture: same as 1", LongTimeout, [this, MakeCase, CheckSample](const FDoneDelegate& Done)
+			{
+				FString Pkg;
+				if (!ImportPkg(TEXT("import_test/tiny_object_detection"), TEXT("ImgDet"), Pkg)) { Done.ExecuteIfBound(); return; }
+				const TSharedPtr<FTexCase> T = MakeCase();
+				if (!T.IsValid()) { Done.ExecuteIfBound(); return; }
+				const TSharedRef<FWatch> W = FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Pkg, TArray<FString>(), T->Path, 3, 0.5f), TEXT("sample det compiling"));
+				const TSharedRef<FDoneSample> S = SampleAtDone(W, T);
+				AwaitAll({ W }, Done, [W, S, CheckSample]()
+				{
+					CheckSample(W, S);
+				});
+			});
+
+			LatentIt("4 argument error is not delayed: compiling texture + score_threshold 1.5 fails with the exact error within 2 ticks", LongTimeout, [this, MakeCase](const FDoneDelegate& Done)
+			{
+				FString Pkg;
+				if (!ImportPkg(TEXT("import_test/tiny_object_detection"), TEXT("ImgDet"), Pkg)) { Done.ExecuteIfBound(); return; }
+				const TSharedPtr<FTexCase> T = MakeCase();
+				if (!T.IsValid()) { Done.ExecuteIfBound(); return; }
+				const TSharedRef<FWatch> W = FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Pkg, TArray<FString>(), T->Path, 3, 1.5f), TEXT("det threshold 1.5 compiling"));
+				// A job that waited for the texture first would report this only after seconds (hundreds of ticks).
+				const TSharedRef<FDoneSample> S = SampleAtDone(W, T);
+				AwaitAll({ W }, Done, [this, W, S]()
+				{
+					ExpectError(W, TEXT("score_threshold must be 0 to 1"));
+					TestTrue(*FString::Printf(TEXT("[%s] ticks until OnDone; got %d, expected 1 or 2 (no wait)"), *W->Label, S->TicksUntilDone), S->TicksUntilDone >= 1 && S->TicksUntilDone <= 2);
+				});
+			});
+
+			LatentIt("5 text task with an Image naming a compiling texture does not wait: input stays 'default text', done while still compiling", LongTimeout, [this, MakeCase, NoStill](const FDoneDelegate& Done)
+			{
+				FString Pkg;
+				if (!ImportPkg(TEXT("import_test/tiny_text_embedding"), TEXT("Emb"), Pkg)) { Done.ExecuteIfBound(); return; }
+				const TSharedPtr<FTexCase> T = MakeCase();
+				if (!T.IsValid()) { Done.ExecuteIfBound(); return; }
+				const TSharedRef<FWatch> W = FWatch::Make(UPipelineMcpLibrary::BenchmarkModelPackage(Pkg, 1, TEXT("cpu"), TArray<FString>(), T->Path), TEXT("text bench + compiling image"));
+				const TSharedRef<FDoneSample> S = SampleAtDone(W, T);
+				AwaitAll({ W }, Done, [this, W, S, NoStill]()
+				{
+					NoStill(W);
+					const FString Js = W->Json().Left(1200);
+					TestTrue(*FString::Printf(TEXT("job succeeded; got %s"), *Js), W->Ok());
+					TestEqual(*FString::Printf(TEXT("input; got %s"), *Js), GetStr(Parse(W->Json(), W->Label), TEXT("input")), FString(TEXT("default text")));
+					// A one-run CPU benchmark of a tiny text model finishes long before a texture that is never released; a job that waited for the
+					// unrelated texture would never complete.
+					TestTrue(*FString::Printf(TEXT("[%s] the texture was still compiling at OnDone (the text job must not wait for it); got compiling=%d after %d ticks"), *W->Label, S->bTextureCompiling ? 1 : 0, S->TicksUntilDone), S->bTextureCompiling);
+				});
+			});
+
+			LatentIt("6 CancelAll while waiting: OnDone once with error 'x', then silence for 2 s (no crash)", LongTimeout, [this, MakeCase](const FDoneDelegate& Done)
+			{
+				FString Pkg;
+				if (!ImportPkg(TEXT("import_test/tiny_image_classification"), TEXT("ImgCls"), Pkg)) { Done.ExecuteIfBound(); return; }
+				const TSharedPtr<FTexCase> T = MakeCase();
+				if (!T.IsValid()) { Done.ExecuteIfBound(); return; }
+				const TSharedRef<FWatch> W = FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Pkg, TArray<FString>(), T->Path, 3, 0.5f), TEXT("cancel while waiting"));
+				if (W->bNull) { AddError(TEXT("RunPipelineSample returned nullptr")); Done.ExecuteIfBound(); return; }
+				TSharedRef<int32> Ticks = MakeShared<int32>(0);
+				// Tick 1 runs the job's Start (it begins waiting); the cancel comes on tick 2, while the build is still running.
+				FTSTicker::GetCoreTicker().AddTicker(TEXT("PipelineMcpJobSpecCancel"), 0.0f, [this, W, T, Ticks, Done](float)
+				{
+					if (++(*Ticks) < 2)
+					{
+						return true;
+					}
+					TestTrue(TEXT("[cancel while waiting] the texture was still compiling at the cancel (else the test did not cover the wait)"), T->IsCompiling());
+					TestEqual(TEXT("[cancel while waiting] OnDone count before the cancel (the job must still be waiting)"), W->Recv->Count, 0);
+					FPipelineMcpJobInternal::CancelAll(TEXT("x"));
+					const double T0 = FPlatformTime::Seconds();
+					PollUntil([T0]() { return FPlatformTime::Seconds() - T0 >= 2.0; }, 10.0, [this, W, Done](bool)
+					{
+						TestEqual(*FString::Printf(TEXT("[cancel while waiting] OnDone count after 2 s; got %d, expected 1 (a late continuation or timeout must not fire again)"), W->Recv->Count), W->Recv->Count, 1);
+						TestTrue(TEXT("[cancel while waiting] OnDone on the game thread"), W->Recv->bAllOnGameThread);
+						ExpectError(W, TEXT("x"));
+						CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, true); // the runner (and its ticker) must be gone without a crash
+						Done.ExecuteIfBound();
+					});
+					return false;
+				});
+			});
+
+			LatentIt("7 GC (full purge) every tick while waiting: the job survives and completes once as in 1", LongTimeout, [this, MakeCase, CheckSample](const FDoneDelegate& Done)
+			{
+				FString Pkg;
+				if (!ImportPkg(TEXT("import_test/tiny_image_classification"), TEXT("ImgCls"), Pkg)) { Done.ExecuteIfBound(); return; }
+				const TSharedPtr<FTexCase> T = MakeCase();
+				if (!T.IsValid()) { Done.ExecuteIfBound(); return; }
+				const TSharedRef<FWatch> W = FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Pkg, TArray<FString>(), T->Path, 3, 0.5f), TEXT("GC while waiting"));
+				if (W->bNull) { AddError(TEXT("RunPipelineSample returned nullptr")); Done.ExecuteIfBound(); return; }
+				const TSharedRef<FDoneSample> S = SampleAtDone(W, T);
+				TSharedRef<int32> GcCount = MakeShared<int32>(0);
+				PollUntil([this, W, GcCount]()
+				{
+					if (W->Recv->Count >= 1) { return true; }
+					if (!W->Job.IsValid())
+					{
+						AddError(TEXT("[GC while waiting] the job was garbage-collected before it completed; it must keep itself alive while waiting"));
+						return true;
+					}
+					CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, true);
+					++(*GcCount);
+					return false;
+				}, 100.0, [this, W, S, GcCount, Done, CheckSample](bool)
+				{
+					TestTrue(*FString::Printf(TEXT("[GC while waiting] GCs run during the wait; got %d, expected at least 1"), *GcCount), *GcCount >= 1);
+					AwaitAll({ W }, Done, [W, S, CheckSample]()
+					{
+						CheckSample(W, S);
+					});
+				});
+			});
+
+			LatentIt("8 eight jobs at once on one compiling texture (mixed samples/benchmarks): each completes once, none 'still compiling'", LongTimeout, [this, MakeCase, NoStill](const FDoneDelegate& Done)
+			{
+				FString Cls, Det;
+				if (!ImportPkg(TEXT("import_test/tiny_image_classification"), TEXT("ImgCls"), Cls)) { Done.ExecuteIfBound(); return; }
+				if (!ImportPkg(TEXT("import_test/tiny_object_detection"), TEXT("ImgDet"), Det)) { Done.ExecuteIfBound(); return; }
+				const TSharedPtr<FTexCase> T = MakeCase();
+				if (!T.IsValid()) { Done.ExecuteIfBound(); return; }
+				TArray<TSharedRef<FWatch>> Ws;
+				Ws.Add(FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Cls, TArray<FString>(), T->Path, 3, 0.5f), TEXT("0 sample cls")));
+				Ws.Add(FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Det, TArray<FString>(), T->Path, 3, 0.5f), TEXT("1 sample det")));
+				Ws.Add(FWatch::Make(UPipelineMcpLibrary::BenchmarkModelPackage(Cls, 1, TEXT("cpu"), TArray<FString>(), T->Path), TEXT("2 bench cls")));
+				Ws.Add(FWatch::Make(UPipelineMcpLibrary::BenchmarkModelPackage(Det, 1, TEXT("cpu"), TArray<FString>(), T->Path), TEXT("3 bench det")));
+				Ws.Add(FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Cls, TArray<FString>(), T->Path, 1, 0.5f), TEXT("4 sample cls topk 1")));
+				Ws.Add(FWatch::Make(UPipelineMcpLibrary::RunPipelineSample(Det, TArray<FString>(), T->Path, 3, 0.0f), TEXT("5 sample det thr 0")));
+				Ws.Add(FWatch::Make(UPipelineMcpLibrary::BenchmarkModelPackage(Cls, 2, TEXT("cpu"), TArray<FString>(), T->Path), TEXT("6 bench cls runs 2")));
+				Ws.Add(FWatch::Make(UPipelineMcpLibrary::BenchmarkModelPackage(Det, 2, TEXT("cpu"), TArray<FString>(), T->Path), TEXT("7 bench det runs 2")));
+				TArray<TSharedRef<FDoneSample>> Ss;
+				for (const TSharedRef<FWatch>& W : Ws) { Ss.Add(SampleAtDone(W, T)); }
+				AwaitAll(Ws, Done, [this, Ws, Ss, NoStill]()
+				{
+					for (int32 i = 0; i < Ws.Num(); ++i)
+					{
+						NoStill(Ws[i]);
+						TestFalse(*FString::Printf(TEXT("[%s] texture IsCompiling() at OnDone; got true, expected false"), *Ws[i]->Label), Ss[i]->bTextureCompiling);
+						if (i == 2 || i == 3 || i == 6 || i == 7)
+						{
+							TestTrue(*FString::Printf(TEXT("[%s] benchmark job succeeded; got %s"), *Ws[i]->Label, *Ws[i]->Json().Left(400)), Ws[i]->Ok());
+						}
+					}
+				});
+			});
 		});
 	});
 

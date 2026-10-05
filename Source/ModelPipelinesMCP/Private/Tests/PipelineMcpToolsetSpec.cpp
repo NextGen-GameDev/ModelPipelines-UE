@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+﻿// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
 //
 // Pipelines.MCP.Toolset.* (WP6.3, contract C39/C40): drives the Python toolset
 // model_pipelines_mcp.toolset.ModelPipelinesTools through unreal.ToolsetRegistry.execute_tool, with no module dependency on
@@ -30,6 +30,8 @@
 #include "Serialization/JsonSerializer.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
+#include "UObject/UObjectHash.h"
+#include "UObject/GarbageCollection.h"
 
 namespace PipelineMcpToolsetSpecPrivate
 {
@@ -138,28 +140,33 @@ namespace PipelineMcpToolsetSpecPrivate
 		}
 	}
 
-	static void DiscardOne(UObject* Obj)
+	/**
+	 * Unloads one loaded package of a test asset: releases its file handle (ResetLoaders), clears the dirty flag and marks every object
+	 * in it garbage. It deliberately does NOT call FAssetRegistryModule::AssetDeleted: that records the package as "deleted in editor"
+	 * (AssetRegistry.cpp CachedEmptyPackages), and when the directory watcher then reports the earlier save of the same file the
+	 * registry logs "package was marked as deleted in editor, but has been modified on disk" (AssetRegistry.cpp:8503). The files are
+	 * deleted from disk instead and the registry told with ScanModifiedAssetFiles (it drops assets whose file is gone, :9036).
+	 */
+	static void UnloadPackage(UPackage* Pkg)
 	{
-		if (!Obj || !IsValid(Obj))
+		if (!Pkg || Pkg == GetTransientPackage() || !IsValid(Pkg))
 		{
 			return;
 		}
-		UPackage* Old = Obj->GetOutermost();
-		UPackage* Transient = GetTransientPackage();
-		if (Old != Transient)
+		ResetLoaders(Pkg);
+		TArray<UObject*> Inside;
+		GetObjectsWithPackage(Pkg, Inside); // default: nested objects included (the bool overload is deprecated in 5.8)
+		for (UObject* O : Inside)
 		{
-			FAssetRegistryModule::AssetDeleted(Obj);
-			Obj->Rename(*MakeUniqueObjectName(Transient, Obj->GetClass(), Obj->GetFName()).ToString(), Transient,
-				REN_DontCreateRedirectors | REN_NonTransactional);
+			if (O && IsValid(O))
+			{
+				O->ClearFlags(RF_Public | RF_Standalone);
+				O->MarkAsGarbage();
+			}
 		}
-		Obj->ClearFlags(RF_Public | RF_Standalone);
-		Obj->MarkAsGarbage();
-		if (Old && Old != Transient && IsValid(Old))
-		{
-			Old->SetDirtyFlag(false);
-			Old->ClearFlags(RF_Public | RF_Standalone);
-			Old->MarkAsGarbage();
-		}
+		Pkg->SetDirtyFlag(false);
+		Pkg->ClearFlags(RF_Public | RF_Standalone);
+		Pkg->MarkAsGarbage();
 	}
 
 	// The Python runner. @OUT@ and @ARGS@ are raw file paths (forward slashes), @MODE@ is "tool" or "schema", @TOOL@ the tool name.
@@ -290,7 +297,10 @@ BEGIN_DEFINE_SPEC(FPipelineMcpToolsetSpec, "Pipelines.MCP.Toolset",
 	bool CheckOk(const PipelineMcpToolsetSpecPrivate::FToolOut& Out, const FString& What);
 	/** Fails unless the tool completed with an error containing Fragment. */
 	void CheckToolError(const PipelineMcpToolsetSpecPrivate::FToolOut& Out, const FString& Fragment, const FString& What);
-	void Cleanup();
+	/** One sweep: unloads the test packages, deletes their files (and the folder), tells the registry. True when it found anything to remove. */
+	bool Cleanup();
+	/** Sweeps until two consecutive sweeps find nothing (late saves, directory-watcher events), then fails the test if files remain. */
+	void CleanupLatent(const FDoneDelegate& Done);
 END_DEFINE_SPEC(FPipelineMcpToolsetSpec)
 
 bool FPipelineMcpToolsetSpec::CanRun()
@@ -455,34 +465,103 @@ void FPipelineMcpToolsetSpec::CheckToolError(const PipelineMcpToolsetSpecPrivate
 	TestTrue(FString::Printf(TEXT("[%s] error contains '%s'; got '%s'"), *What, *Fragment, *Tail(Out.Error)), Out.Error.Contains(Fragment));
 }
 
-void FPipelineMcpToolsetSpec::Cleanup()
+bool FPipelineMcpToolsetSpec::Cleanup()
 {
 	using namespace PipelineMcpToolsetSpecPrivate;
+	bool bFound = false;
 	if (!Dest.IsEmpty() && FModuleManager::Get().IsModuleLoaded("AssetRegistry"))
 	{
+		IAssetRegistry& Registry = *IAssetRegistry::Get();
+		// 1. Unload every loaded package of the test folder (no GetAsset: that would load assets just to delete them).
 		TArray<FAssetData> Assets;
-		IAssetRegistry::Get()->GetAssetsByPath(FName(*Dest), Assets, true);
-		TArray<UObject*> Objs;
+		Registry.GetAssetsByPath(FName(*Dest), Assets, true);
+		TSet<FName> PackageNames;
 		for (const FAssetData& A : Assets)
 		{
-			if (UObject* O = A.GetAsset())
+			PackageNames.Add(A.PackageName);
+		}
+		for (const FName& PackageName : PackageNames)
+		{
+			if (UPackage* Pkg = FindPackage(nullptr, *PackageName.ToString()))
 			{
-				Objs.Add(O);
+				bFound = true;
+				UnloadPackage(Pkg);
 			}
 		}
-		for (UObject* O : Objs)
+		if (bFound)
 		{
-			DiscardOne(O);
+			// Drops the garbage so no file handle or mapping is left on the .uasset files.
+			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 		}
-		// Test cleanup only: the product never deletes. import_model_folder(confirm=true) saves .uasset files here.
+		// 2. Delete the files (test cleanup only: the product never deletes) and tell the registry the files are gone, so the
+		// assets leave its tables now and not through a late directory-watcher event.
 		const FString ContentDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / TEXT("PipelinesTests") / (TEXT("MCP_") + DestGuid));
-		IFileManager::Get().DeleteDirectory(*ContentDir, false, true);
+		TArray<FString> Files;
+		IFileManager::Get().FindFilesRecursive(Files, *ContentDir, TEXT("*.*"), true, false);
+		TArray<FString> PackageFiles;
+		for (const FString& F : Files)
+		{
+			bFound = true;
+			if (FPackageName::IsPackageExtension(*FPaths::GetExtension(F, true)))
+			{
+				PackageFiles.Add(F);
+			}
+			if (!IFileManager::Get().Delete(*F, false, true, true))
+			{
+				UE_LOG(LogTemp, Display, TEXT("PipelineMcpToolsetSpec cleanup: could not delete '%s' yet (retried by the next sweep)"), *F);
+			}
+		}
+		if (PackageFiles.Num() > 0)
+		{
+			Registry.ScanModifiedAssetFiles(PackageFiles);
+		}
+		if (IFileManager::Get().DirectoryExists(*ContentDir))
+		{
+			bFound = true;
+			IFileManager::Get().DeleteDirectory(*ContentDir, false, true);
+		}
+		// The shared parent is removed once empty (non-tree delete: refuses when something else is in it).
+		IFileManager::Get().DeleteDirectory(*FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / TEXT("PipelinesTests")), false, false);
 	}
 	for (const FString& F : TempFiles)
 	{
 		IFileManager::Get().Delete(*F, false, true, true);
 	}
 	TempFiles.Reset();
+	return bFound;
+}
+
+void FPipelineMcpToolsetSpec::CleanupLatent(const FDoneDelegate& Done)
+{
+	// A python tool may still be saving when a test ends (a timed-out import), and the directory watcher reports saves late. Sweep until
+	// two sweeps in a row find nothing, at most ~15 s, then check the folder is really gone.
+	Cleanup();
+	const FString ContentDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / TEXT("PipelinesTests") / (TEXT("MCP_") + DestGuid));
+	const TSharedRef<int32> CleanSweeps = MakeShared<int32>(0);
+	const TSharedRef<double> Deadline = MakeShared<double>(FPlatformTime::Seconds() + 15.0);
+	const FString Dir = ContentDir;
+	FTSTicker::GetCoreTicker().AddTicker(TEXT("PipelineMcpToolsetSpecCleanup"), 0.25f, [this, Done, CleanSweeps, Deadline, Dir](float)
+	{
+		if (Cleanup())
+		{
+			*CleanSweeps = 0;
+		}
+		else
+		{
+			++(*CleanSweeps);
+		}
+		const bool bTimedOut = FPlatformTime::Seconds() > *Deadline;
+		if (*CleanSweeps >= 2 || bTimedOut)
+		{
+			if (IFileManager::Get().DirectoryExists(*Dir))
+			{
+				AddError(FString::Printf(TEXT("cleanup left '%s' on disk (a file is still locked or a save is still running)"), *Dir));
+			}
+			Done.ExecuteIfBound();
+			return false;
+		}
+		return true;
+	});
 }
 
 void FPipelineMcpToolsetSpec::Define()
@@ -495,9 +574,9 @@ void FPipelineMcpToolsetSpec::Define()
 		Dest = FString::Printf(TEXT("/Game/PipelinesTests/MCP_%s"), *DestGuid);
 	});
 
-	AfterEach([this]()
+	LatentAfterEach(FTimespan::FromSeconds(60), [this](const FDoneDelegate& Done)
 	{
-		Cleanup();
+		CleanupLatent(Done);
 	});
 
 	Describe("Registration", [this]()

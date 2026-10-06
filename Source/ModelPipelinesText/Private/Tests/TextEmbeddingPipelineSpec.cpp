@@ -555,7 +555,7 @@ void FTextEmbeddingPipelineSpec::Define()
 		It("InvalidTokenizerJson", [this]()
 		{
 			// Garbage tokenizer text must surface as PreprocessFailed (10) from OnInitialize, with a message, and no pipeline.
-			AddExpectedMessage(TEXT("^InitializeTokenizerFromJson: failed to parse tokenizer JSON"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1); // the LogTokenizers line (anchored: the pipeline line below quotes it mid-message)
+			AddExpectedMessage(TEXT("^UPipelineTokenizer::InitializeTokenizerFromJson: failed to parse tokenizer JSON"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1); // the LogModelPipelinesTokenizer line (anchored: the pipeline line below quotes it mid-message)
 			AddExpectedMessage(TEXT("UTextEmbeddingPipeline: tokenizer of package"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1, false);
 			FFixture F;
 			if (!MakeFixture(*this, MiniSlug, EPipelineDevice::CPU, F, false, [](UPipelineModelPackage& P) { P.TokenizerJson = TEXT("{not json"); })) { return; }

@@ -23,3 +23,7 @@ goldens/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+Source/ThirdParty/ModelPipelinesTokenizerLibrary/x64/**
+!Source/ThirdParty/ModelPipelinesTokenizerLibrary/x64/Release/
+!Source/ThirdParty/ModelPipelinesTokenizerLibrary/x64/Release/mpt_tokenizers_c.buildinfo.json

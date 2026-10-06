@@ -22,6 +22,12 @@
 			"PlatformAllowList": [ "Win64" ]
 		},
 		{
+			"Name": "ModelPipelinesTokenizer",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64" ]
+		},
+		{
 			"Name": "ModelPipelinesText",
 			"Type": "Runtime",
 			"LoadingPhase": "Default",
@@ -53,10 +59,6 @@
 		}
 	],
 	"Plugins": [
-		{
-			"Name": "Tokenizers",
-			"Enabled": true
-		},
 		{
 			"Name": "NNERuntimeORT",
 			"Enabled": true

@@ -7,7 +7,7 @@
 #include "PipelineModelPackage.h"
 #include "PipelineTensor.h"
 #include "PipelineTextPreprocess.h"
-#include "TokenizerWrapper.h"
+#include "PipelineTokenizer.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(TextEmbeddingPipeline)
 
@@ -112,7 +112,7 @@ FPipelineResult UTextEmbeddingPipeline::OnInitialize(UPipelineModelPackage* InPa
 		return FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("package is null"));
 	}
 	FPipelineTextStatePtr NewState;
-	UTokenizerWrapper* NewTokenizer = nullptr;
+	UPipelineTokenizer* NewTokenizer = nullptr;
 	const FPipelineResult R = CreateTextState(*InPackage, NewState, NewTokenizer);
 	if (!R.bSuccess)
 	{

@@ -1,0 +1,31 @@
+{
+    "symbol_prefix":  "mpt_",
+    "source_lib_sha256":  "718a6821d5a0cc6a8440a0167ffaadd951c6d6dd91ea232e5ef289483028103a",
+    "lib_sha256":  "5cf70fce622c449a582c23cfd95bc5dd17fd4d5f9530028f4811c6c4daeb2f2a",
+    "renamed_symbol_count":  18178,
+    "rename_map_sha256":  "790fd555b7269ad2fdc252cc368e0f33fa4d0dabbefac31caadb663a424a2ec6",
+    "dropped_export_directives":  203,
+    "exclusions":  [
+                       "^__real@",
+                       "^__xmm@",
+                       "^__ymm@",
+                       "^__zmm@",
+                       "^\\?\\?_C@",
+                       "^\\?_OptionsStorage",
+                       "^__local_stdio_printf_options$",
+                       "^sprintf_s$",
+                       "^fprintf$",
+                       "^printf$",
+                       "^_vfprintf_l$",
+                       "^_vsnprintf_s$",
+                       "^_vsnprintf_s_l$",
+                       "^_vsprintf_s_l$",
+                       "^_vsnprintf_l$",
+                       "^_vsprintf_l$",
+                       "^_snprintf$"
+                   ],
+    "rust_objcopy_version":  "LLVM version 22.1.8-rust-1.98.1-stable",
+    "lib_exe_version":  "14.44.35225.0 (toolset 14.44.35207)",
+    "script_version":  "1.1.0",
+    "date_utc":  "2026-10-06T01:06:28Z"
+}

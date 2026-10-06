@@ -14,7 +14,7 @@
 #include "PipelineTaskIO.h"
 #include "PipelineTensor.h"
 #include "PipelineEditorLog.h"
-#include "TokenizerWrapper.h"
+#include "PipelineTokenizer.h"
 
 namespace PipelineModelValidatorPrivate
 {
@@ -378,10 +378,10 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 	// Step 2: tokenizer (text tasks only).
 	TArray<int32> Ids;
 	// Kept alive for the worst-case run in step 5 (text tasks only).
-	TStrongObjectPtr<UTokenizerWrapper> Tokenizer;
+	TStrongObjectPtr<UPipelineTokenizer> Tokenizer;
 	if (IsTextTask(Task))
 	{
-		Tokenizer.Reset(NewObject<UTokenizerWrapper>(GetTransientPackage()));
+		Tokenizer.Reset(NewObject<UPipelineTokenizer>(GetTransientPackage()));
 		if (!Tokenizer.IsValid() || !Tokenizer->InitializeTokenizerFromJson(Package->TokenizerJson))
 		{
 			const FString Why = Tokenizer.IsValid() ? Tokenizer->GetLastError() : FString(TEXT("could not create the tokenizer object"));

@@ -10,7 +10,7 @@
 #include "PipelineModelPackage.h"
 #include "PipelineTensor.h"
 #include "PipelineTypes.h"
-#include "TokenizerWrapper.h"
+#include "PipelineTokenizer.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogModelPipelinesText, Log, All);
 
@@ -27,7 +27,7 @@ namespace UE::ModelPipelines::Text
 	struct FPipelineTextState
 	{
 		/** Initialized tokenizer; its public calls are serialized by its own lock. */
-		TStrongObjectPtr<UTokenizerWrapper> Tokenizer;
+		TStrongObjectPtr<UPipelineTokenizer> Tokenizer;
 
 		/** Copy of the package settings taken at initialization. */
 		FPipelinePreprocessSettings Settings;
@@ -50,7 +50,7 @@ namespace UE::ModelPipelines::Text
 	/** Game thread. New tokenizer (outer: the transient package) loaded from Package->TokenizerJson and the package's
 	    settings. Failure -> PreprocessFailed with the tokenizer's error; OutState untouched. */
 	FPipelineResult CreateTextState(const UPipelineModelPackage& Package, FPipelineTextStatePtr& OutState,
-		UTokenizerWrapper*& OutTokenizer);
+		UPipelineTokenizer*& OutTokenizer);
 
 	/**
 	 * Background. Tokenizes Texts (special tokens and truncation per State.Settings, pad id 0) and builds one tensor per

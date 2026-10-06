@@ -12,7 +12,7 @@
 #include "PipelineTypes.h"
 #include "TextEmbeddingPipeline.generated.h"
 
-class UTokenizerWrapper;
+class UPipelineTokenizer;
 class UPipelineModelPackage;
 
 namespace UE::ModelPipelines::Text
@@ -55,7 +55,7 @@ private:
 
 	/** Keeps the tokenizer reachable for GC too (the shared state holds a TStrongObjectPtr to it). */
 	UPROPERTY()
-	TObjectPtr<UTokenizerWrapper> Tokenizer;
+	TObjectPtr<UPipelineTokenizer> Tokenizer;
 
 	/** Shared with in-flight calls. Read only on the game thread (Async) or by a blocking caller that keeps the pipeline
 	    alive; released by the destructor. */

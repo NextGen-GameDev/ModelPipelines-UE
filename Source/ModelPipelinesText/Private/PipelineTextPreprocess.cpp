@@ -37,7 +37,7 @@ namespace UE::ModelPipelines::Text
 		 * the failed call returned, so another thread's call on the same tokenizer may have replaced or cleared it in between;
 		 * the marker tells the user the message is the generic one. (A precise fix needs a Tokenizers-UE API change.)
 		 */
-		static FString TokenizerError(const UTokenizerWrapper& Tokenizer, const TCHAR* Fallback)
+		static FString TokenizerError(const UPipelineTokenizer& Tokenizer, const TCHAR* Fallback)
 		{
 			const FString Err = Tokenizer.GetLastError();
 			return Err.IsEmpty() ? FString::Printf(TEXT("%s (no detail available)"), Fallback) : Err;
@@ -216,11 +216,11 @@ namespace UE::ModelPipelines::Text
 	}
 
 	FPipelineResult CreateTextState(const UPipelineModelPackage& Package, FPipelineTextStatePtr& OutState,
-		UTokenizerWrapper*& OutTokenizer)
+		UPipelineTokenizer*& OutTokenizer)
 	{
 		// Outer is the transient package, not the pipeline: a pipeline-owned subobject held by an in-flight call's
 		// TStrongObjectPtr would keep a garbage-marked pipeline reachable (C20, amended 2026-10-02).
-		UTokenizerWrapper* Tokenizer = NewObject<UTokenizerWrapper>(GetTransientPackage());
+		UPipelineTokenizer* Tokenizer = NewObject<UPipelineTokenizer>(GetTransientPackage());
 		if (!Tokenizer)
 		{
 			return FPipelineResult::Fail(EPipelineError::Internal, TEXT("could not create the tokenizer object"));
@@ -259,7 +259,7 @@ namespace UE::ModelPipelines::Text
 			return CountCheck;
 		}
 
-		UTokenizerWrapper* Tokenizer = State.Tokenizer.Get();
+		UPipelineTokenizer* Tokenizer = State.Tokenizer.Get();
 		if (!Tokenizer)
 		{
 			return FPipelineResult::Fail(EPipelineError::PreprocessFailed, TEXT("tokenizer is not loaded"));
@@ -290,7 +290,7 @@ namespace UE::ModelPipelines::Text
 		}
 
 		const int32 MaxTokens = State.Settings.MaxTokens;
-		FTokenizedBatch Batch;
+		FPipelineTokenizedBatch Batch;
 		if (!Tokenizer->EncodeBatch(Texts, Batch, State.Settings.bAddSpecialTokens, MaxTokens, /*PadTokenId*/ 0))
 		{
 			return FPipelineResult::Fail(EPipelineError::PreprocessFailed,

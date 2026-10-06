@@ -31,6 +31,7 @@
 #include "Math/RandomStream.h"
 #include "TextureCompiler.h"
 #include "Misc/App.h"
+#include "Misc/EngineVersion.h"
 #include "PipelineMcpJob.h"
 #include "PipelineMcpRun.h"
 #include "PipelineMcpLibrary.h"
@@ -929,6 +930,35 @@ void FPipelineMcpJobSpec::Define()
 				}
 				// The benchmark works on a transient duplicate: the asset keeps its device and is not modified.
 				TestEqual(TEXT("source package PreferredDevice after the benchmark; expected GPU (unchanged)"), (int32)Pkg->PreferredDevice, (int32)EPipelineDevice::GPU);
+			});
+		});
+
+		LatentIt("tiny_text_embedding runs 1 on 'cpu': top-level engine_version equals FEngineVersion::Current() and gpu_adapter is a non-empty real adapter name (C38)", LongTimeout, [this](const FDoneDelegate& Done)
+		{
+			FString PkgPath;
+			if (!ImportPkg(TEXT("import_test/tiny_text_embedding"), TEXT("Emb"), PkgPath)) { Done.ExecuteIfBound(); return; }
+			const TSharedRef<FWatch> W = FWatch::Make(UPipelineMcpLibrary::BenchmarkModelPackage(PkgPath, 1, TEXT("cpu"), TArray<FString>(), TEXT("")), TEXT("bench env fields"));
+			AwaitAll({ W }, Done, [this, W]()
+			{
+				const FString Js = W->Json().Left(1200);
+				TestTrue(*FString::Printf(TEXT("job succeeded; got %s"), *Js), W->Ok());
+				const TSharedPtr<FJsonObject> J = Parse(W->Json(), TEXT("bench env fields"));
+				if (!J.IsValid()) { return; }
+				// A missing or hard-coded version string would fail here; the value must be exactly the running engine's.
+				FString EngineVer;
+				if (TestTrue(*FString::Printf(TEXT("engine_version is a string field; got %s"), *Js), J->TryGetStringField(TEXT("engine_version"), EngineVer)))
+				{
+					TestEqual(TEXT("engine_version"), EngineVer, FEngineVersion::Current().ToString());
+				}
+				// gpu_adapter must exist as a string. Under -nullrhi / non-D3D12 RHI it must come from DXGI adapter 0 (the laptop has adapters),
+				// so an empty string, "Unknown" or "Null" (the null RHI's adapter name leaking through) is a bug.
+				FString Adapter;
+				if (TestTrue(*FString::Printf(TEXT("gpu_adapter is a string field; got %s"), *Js), J->TryGetStringField(TEXT("gpu_adapter"), Adapter)))
+				{
+					TestFalse(*FString::Printf(TEXT("gpu_adapter non-empty on Windows (CanEverRender=%d); got '%s'"), FApp::CanEverRender() ? 1 : 0, *Adapter), Adapter.IsEmpty());
+					TestFalse(*FString::Printf(TEXT("gpu_adapter must not be 'Unknown'; got '%s'"), *Adapter), Adapter.Equals(TEXT("Unknown"), ESearchCase::IgnoreCase));
+					TestFalse(*FString::Printf(TEXT("gpu_adapter must not be 'Null'; got '%s'"), *Adapter), Adapter.Equals(TEXT("Null"), ESearchCase::IgnoreCase));
+				}
 			});
 		});
 

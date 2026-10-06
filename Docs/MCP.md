@@ -281,6 +281,8 @@ Example result: resnet-50 on `T_classify_jellyfish`, 10 runs, `devices` set to `
   "package": "/Game/Models/Live/resnet-50.resnet-50",
   "task": "ImageClassification",
   "runs": 10,
+  "engine_version": "5.8.3-58210709+++UE5+Release-5.8",
+  "gpu_adapter": "NVIDIA GeForce RTX 3080 Laptop GPU",
   "devices": [
     {
       "device": "CPU",
@@ -306,7 +308,8 @@ Each device entry also has `available`, `actual_device`, `preprocess_ms`, `postp
 - `actual_device` shows where the model really ran. If you asked for the GPU and got `CPU`, the plugin fell back.
 - `memory_mb` is the memory use of the whole editor process. It is approximate. Do not read it as the size of the model.
 - On a machine without a usable GPU, the GPU entry is `{"device":"GPU","available":false}`. That is not an error.
-- The result does not name the GPU or the engine version. Write them down yourself when you keep the numbers.
+- `engine_version` is the Unreal Engine version the numbers were measured on, for example `"5.8.3-58210709+++UE5+Release-5.8"`.
+- `gpu_adapter` is the GPU that DirectML runs on, for example `"NVIDIA GeForce RTX 3080 Laptop GPU"`. With the D3D12 renderer it is the renderer's GPU; otherwise it is the first GPU Windows lists. It is `""` when it can't be found. Keep both with the numbers.
 - If one device fails (for example the texture is still compiling), the call still succeeds and that device's entry has an `error` text. Call again to get that device.
 
 **Why `total_ms` looks large.** `total_ms` includes waiting for the editor to run its next tick. When the editor window is not in front, the editor slows down to a few frames a second, so `total_ms` can be hundreds of milliseconds even for a fast model. In the live run it was 333 to 500 ms while the model took 19 to 65 ms. For a realistic `total_ms`, bring the editor to the front, or untick **Edit > Editor Preferences > General > Performance > Use Less CPU when in Background**.

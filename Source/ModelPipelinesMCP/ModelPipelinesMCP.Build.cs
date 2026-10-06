@@ -12,6 +12,12 @@ public class ModelPipelinesMCP : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "ModelPipelinesCore" });
 		PrivateDependencyModuleNames.AddRange(new string[] { "Json", "AssetRegistry", "UnrealEd", "NNE",
-			"ModelPipelinesEditor", "ModelPipelinesText", "ModelPipelinesVision" });
+			"ModelPipelinesEditor", "ModelPipelinesText", "ModelPipelinesVision", "RHI" });
+
+			// Benchmark results name the DXGI adapter DirectML uses when the RHI isn't D3D12 (PipelineMcpHardware.cpp).
+			if (Target.Platform == UnrealTargetPlatform.Win64)
+			{
+				PublicSystemLibraries.Add("dxgi.lib");
+			}
 	}
 }

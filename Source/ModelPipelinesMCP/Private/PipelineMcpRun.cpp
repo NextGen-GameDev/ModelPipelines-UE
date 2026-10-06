@@ -17,6 +17,7 @@
 #include "PipelineBase.h"
 #include "PipelineImage.h"
 #include "PipelineMcpJob.h"
+#include "PipelineMcpHardware.h"
 #include "PipelineMcpJson.h"
 #include "PipelineMcpLog.h"
 #include "PipelineModelPackage.h"
@@ -375,6 +376,10 @@ namespace PipelineMcpRunPrivate
 			Root->SetStringField(TEXT("task"), PipelineMcpJson::TaskToString(Task));
 			Root->SetNumberField(TEXT("runs"), Runs);
 			Root->SetStringField(TEXT("input"), InputDesc);
+			Root->SetStringField(TEXT("engine_version"), PipelineMcpHardware::EngineVersion());
+			Root->SetStringField(TEXT("gpu_adapter"), PipelineMcpHardware::GpuAdapter());
+			UE_LOG(LogModelPipelinesMCP, Log, TEXT("Benchmark %s: engine_version '%s', gpu_adapter '%s'"), *Pkg->GetPathName(),
+				*Root->GetStringField(TEXT("engine_version")), *Root->GetStringField(TEXT("gpu_adapter")));
 			DeviceIndex = 0;
 			// A just-imported texture may still be compiling: wait once, before the first device (not timed).
 			WaitForTexture(Texture.Get(), [this]() { StartDevice(); });

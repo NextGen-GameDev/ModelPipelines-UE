@@ -4,8 +4,10 @@
 
 #include "Containers/ArrayView.h"
 #include "PipelineMath.h"
+#include "UObject/StrongObjectPtr.h"
 #include "PipelineModelPackage.h"
 #include "PipelineTensor.h"
+#include "PipelineTextChunks.h"
 #include "PipelineTextPreprocess.h"
 #include "PipelineTokenizer.h"
 
@@ -185,22 +187,42 @@ void UTextEmbeddingPipeline::EmbedAsync(const TArray<FString>& Texts, FPipelineE
 		return;
 	}
 
-	const TSharedRef<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe> Embeddings = MakeShared<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>();
+	using namespace UE::ModelPipelines::Text;
+	using FEmbeddingsRef = TSharedRef<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>;
+
+	// All chunks' embeddings, in input order (C43). Appended by each chunk's commit on the game thread.
+	const FEmbeddingsRef Total = MakeShared<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>();
 	// Off the game thread pass no state: RunStages fails the call there, and TextState is only read on the game thread.
-	const UE::ModelPipelines::Text::FPipelineTextStatePtr State = IsInGameThread() ? TextState : nullptr;
-	FPipelineStages Stages = MakeStages(State, Texts, Embeddings);
-	Stages.Complete = [Embeddings, Callback = MoveTemp(OnComplete)](const FPipelineResult& Result) mutable
+	const FPipelineTextStatePtr State = IsInGameThread() ? TextState : nullptr;
+	// Multi-chunk calls issue chunk k+1 from chunk k's Complete via this UObject: pin it until the final callback, so a pipeline
+	// released mid-call still finishes the call like an unchunked one (C19/C43). Released on the game thread by the runner.
+	TStrongObjectPtr<UTextEmbeddingPipeline> Pin;
+	if (IsInGameThread() && NumTextChunks(Texts.Num()) > 1)
 	{
-		if (Result.bSuccess)
+		Pin.Reset(this);
+	}
+	const bool bSingle = Texts.Num() <= MaxTextsPerInference;
+	RunTextChunksAsync(Texts.Num(),
+		[this, Pin, Texts, State, Total, bSingle](int32 First, int32 Num)
 		{
-			Callback(Result, *Embeddings);
-		}
-		else
+			const TSharedRef<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe> Chunk = MakeShared<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>();
+			FTextChunk Out;
+			Out.Stages = MakeStages(State, bSingle ? Texts : TArray<FString>(Texts.GetData() + First, Num), Chunk);
+			Out.Commit = [Total, Chunk]() { Total->Append(MoveTemp(*Chunk)); };
+			return Out;
+		},
+		[this, Pin](FPipelineStages&& Stages) { RunStages(MoveTemp(Stages)); },
+		[Total, Callback = MoveTemp(OnComplete)](const FPipelineResult& Result) mutable
 		{
-			Callback(Result, TArray<FPipelineEmbedding>());
-		}
-	};
-	RunStages(MoveTemp(Stages));
+			if (Result.bSuccess)
+			{
+				Callback(Result, *Total);
+			}
+			else
+			{
+				Callback(Result, TArray<FPipelineEmbedding>());
+			}
+		});
 }
 
 FPipelineResult UTextEmbeddingPipeline::EmbedBlocking(const TArray<FString>& Texts, TArray<FPipelineEmbedding>& OutEmbeddings)
@@ -211,11 +233,24 @@ FPipelineResult UTextEmbeddingPipeline::EmbedBlocking(const TArray<FString>& Tex
 	{
 		return Count;
 	}
-	const TSharedRef<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe> Embeddings = MakeShared<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>();
-	const FPipelineResult R = RunStagesBlocking(MakeStages(TextState, Texts, Embeddings));
+	using namespace UE::ModelPipelines::Text;
+	using FEmbeddingsRef = TSharedRef<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>;
+
+	TArray<FPipelineEmbedding> Total;
+	const bool bSingle = Texts.Num() <= MaxTextsPerInference;
+	const FPipelineResult R = RunTextChunksBlocking(Texts.Num(),
+		[this, &Texts, &Total, bSingle](int32 First, int32 Num)
+		{
+			const FEmbeddingsRef Chunk = MakeShared<TArray<FPipelineEmbedding>, ESPMode::ThreadSafe>();
+			FTextChunk Out;
+			Out.Stages = MakeStages(TextState, bSingle ? Texts : TArray<FString>(Texts.GetData() + First, Num), Chunk);
+			Out.Commit = [&Total, Chunk]() { Total.Append(MoveTemp(*Chunk)); };
+			return Out;
+		},
+		[this](FPipelineStages&& Stages) { return RunStagesBlocking(MoveTemp(Stages)); });
 	if (R.bSuccess)
 	{
-		OutEmbeddings = MoveTemp(*Embeddings);
+		OutEmbeddings = MoveTemp(Total);
 	}
 	return R;
 }

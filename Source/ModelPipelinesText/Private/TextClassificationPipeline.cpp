@@ -4,8 +4,10 @@
 
 #include "Containers/ArrayView.h"
 #include "PipelineMath.h"
+#include "UObject/StrongObjectPtr.h"
 #include "PipelineModelPackage.h"
 #include "PipelineTensor.h"
+#include "PipelineTextChunks.h"
 #include "PipelineTextPreprocess.h"
 #include "PipelineTokenizer.h"
 
@@ -179,22 +181,42 @@ void UTextClassificationPipeline::ClassifyAsync(const TArray<FString>& Texts, in
 		return;
 	}
 
-	const TSharedRef<TArray<FPipelineClassification>, ESPMode::ThreadSafe> Results = MakeShared<TArray<FPipelineClassification>, ESPMode::ThreadSafe>();
+	using namespace UE::ModelPipelines::Text;
+	using FResultsRef = TSharedRef<TArray<FPipelineClassification>, ESPMode::ThreadSafe>;
+
+	// All chunks' results, in input order (C43). Appended by each chunk's commit on the game thread.
+	const FResultsRef Total = MakeShared<TArray<FPipelineClassification>, ESPMode::ThreadSafe>();
 	// Off the game thread pass no state: RunStages fails the call there, and TextState is only read on the game thread.
-	const UE::ModelPipelines::Text::FPipelineTextStatePtr State = IsInGameThread() ? TextState : nullptr;
-	FPipelineStages Stages = MakeStages(State, Texts, TopK, Results);
-	Stages.Complete = [Results, Callback = MoveTemp(OnComplete)](const FPipelineResult& Result) mutable
+	const FPipelineTextStatePtr State = IsInGameThread() ? TextState : nullptr;
+	// Multi-chunk calls issue chunk k+1 from chunk k's Complete via this UObject: pin it until the final callback, so a pipeline
+	// released mid-call still finishes the call like an unchunked one (C19/C43). Released on the game thread by the runner.
+	TStrongObjectPtr<UTextClassificationPipeline> Pin;
+	if (IsInGameThread() && NumTextChunks(Texts.Num()) > 1)
 	{
-		if (Result.bSuccess)
+		Pin.Reset(this);
+	}
+	const bool bSingle = Texts.Num() <= MaxTextsPerInference;
+	RunTextChunksAsync(Texts.Num(),
+		[this, Pin, Texts, State, Total, TopK, bSingle](int32 First, int32 Num)
 		{
-			Callback(Result, *Results);
-		}
-		else
+			const TSharedRef<TArray<FPipelineClassification>, ESPMode::ThreadSafe> Chunk = MakeShared<TArray<FPipelineClassification>, ESPMode::ThreadSafe>();
+			FTextChunk Out;
+			Out.Stages = MakeStages(State, bSingle ? Texts : TArray<FString>(Texts.GetData() + First, Num), TopK, Chunk);
+			Out.Commit = [Total, Chunk]() { Total->Append(MoveTemp(*Chunk)); };
+			return Out;
+		},
+		[this, Pin](FPipelineStages&& Stages) { RunStages(MoveTemp(Stages)); },
+		[Total, Callback = MoveTemp(OnComplete)](const FPipelineResult& Result) mutable
 		{
-			Callback(Result, TArray<FPipelineClassification>());
-		}
-	};
-	RunStages(MoveTemp(Stages));
+			if (Result.bSuccess)
+			{
+				Callback(Result, *Total);
+			}
+			else
+			{
+				Callback(Result, TArray<FPipelineClassification>());
+			}
+		});
 }
 
 FPipelineResult UTextClassificationPipeline::ClassifyBlocking(const TArray<FString>& Texts, int32 TopK, TArray<FPipelineClassification>& OutResults)
@@ -205,11 +227,24 @@ FPipelineResult UTextClassificationPipeline::ClassifyBlocking(const TArray<FStri
 	{
 		return Count;
 	}
-	const TSharedRef<TArray<FPipelineClassification>, ESPMode::ThreadSafe> Results = MakeShared<TArray<FPipelineClassification>, ESPMode::ThreadSafe>();
-	const FPipelineResult R = RunStagesBlocking(MakeStages(TextState, Texts, TopK, Results));
+	using namespace UE::ModelPipelines::Text;
+	using FResultsRef = TSharedRef<TArray<FPipelineClassification>, ESPMode::ThreadSafe>;
+
+	TArray<FPipelineClassification> Total;
+	const bool bSingle = Texts.Num() <= MaxTextsPerInference;
+	const FPipelineResult R = RunTextChunksBlocking(Texts.Num(),
+		[this, &Texts, &Total, TopK, bSingle](int32 First, int32 Num)
+		{
+			const FResultsRef Chunk = MakeShared<TArray<FPipelineClassification>, ESPMode::ThreadSafe>();
+			FTextChunk Out;
+			Out.Stages = MakeStages(TextState, bSingle ? Texts : TArray<FString>(Texts.GetData() + First, Num), TopK, Chunk);
+			Out.Commit = [&Total, Chunk]() { Total.Append(MoveTemp(*Chunk)); };
+			return Out;
+		},
+		[this](FPipelineStages&& Stages) { return RunStagesBlocking(MoveTemp(Stages)); });
 	if (R.bSuccess)
 	{
-		OutResults = MoveTemp(*Results);
+		OutResults = MoveTemp(Total);
 	}
 	return R;
 }

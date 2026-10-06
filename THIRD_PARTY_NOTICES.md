@@ -125,7 +125,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-TODO(Noah): this MIT text is the standard form, not copied from a file in the engine. Compare it with the license page linked above before release.
+Checked 2026-10-06 against the license of Microsoft.ML.OnnxRuntime.DirectML 1.24.1 on nuget.org (MIT, "Copyright (c) Microsoft Corporation").
 
 ## Sample models
 

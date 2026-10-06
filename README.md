@@ -7,8 +7,8 @@ Unreal's Neural Network Engine (NNE).
 **Status:** early development. Draft documentation below; the API may still change.
 
 - Platform: Win64. Engines: UE 5.8 (primary) and 5.7.
-- Depends on the [Tokenizers](https://github.com/NextGen-GameDev/Tokenizers-UE) plugin and
-  the engine's NNERuntimeORT plugin.
+- Depends only on the engine's NNERuntimeORT plugin. Tokenization is built in (an internal module with its own renamed copy
+  of the tokenizer library), so it also works next to the [Tokenizers](https://github.com/NextGen-GameDev/Tokenizers-UE) plugin.
 
 ## Documentation
 
@@ -21,6 +21,8 @@ Start at [Docs/README.md](Docs/README.md).
 - [AI agent tools (MCP)](Docs/MCP.md): optional, UE 5.8 only
 - [Troubleshooting](Docs/Troubleshooting.md)
 - [Model licenses](Docs/ModelLicenses.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 

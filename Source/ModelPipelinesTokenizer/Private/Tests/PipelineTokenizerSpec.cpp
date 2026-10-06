@@ -15,6 +15,7 @@
 #include "UObject/GarbageCollection.h"
 #include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
+#include "UObject/StructOnScope.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
 #include "PipelineTokenizer.h"

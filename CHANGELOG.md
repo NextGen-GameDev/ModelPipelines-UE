@@ -1,10 +1,8 @@
 # Changelog
 
-DRAFT for Noah. The version and date are proposals, see `.pipelines-dev/logs/m7/wp76-proposals.md`.
+## [0.1.0] - 2026-10-06
 
-## [Unreleased]
-
-First public release (proposed version 0.1.0, beta).
+First public release (beta).
 
 ### Added
 

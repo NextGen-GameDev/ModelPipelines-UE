@@ -532,6 +532,8 @@ void FPipelineModelImporterSpec::Define()
 		{
 			It(FString::Printf(TEXT("imports %s with every field equal to the expectations"), Id), [this, Id]()
 			{
+				if (FCString::Strcmp(Id, TEXT("no_license")) == 0) { UE::ModelPipelines::EditorTests::ExpectLicenseWarnings(*this, true, true, true); }
+				if (FCString::Strcmp(Id, TEXT("readme_license")) == 0) { UE::ModelPipelines::EditorTests::ExpectLicenseWarnings(*this, false, true, true); }
 				CheckImportedCase(Id, FString::Printf(TEXT("Imp_%s"), Id));
 			});
 		}
@@ -540,6 +542,7 @@ void FPipelineModelImporterSpec::Define()
 		// import still succeeds (license problems warn, never block).
 		It("keeps the three license warnings of no_license in the report", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectLicenseWarnings(*this, true, true, true);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("no_license"), Root, Case, Folder)) { return; }
@@ -638,6 +641,7 @@ void FPipelineModelImporterSpec::Define()
 			// Catches a failed import leaving assets in the project (Noah's rule) or returning half-built objects.
 			It(FString::Printf(TEXT("fails %s with the listed errors and creates nothing"), Id), [this, Id]()
 			{
+				UE::ModelPipelines::EditorTests::ExpectCaseImportLogs(*this, Id);
 				// ORT logs its own errors when it rejects a model (unknown_op); those are expected.
 				AddExpectedError(TEXT("ONNX Runtime"), EAutomationExpectedErrorFlags::Contains, -1);
 				AddExpectedError(TEXT("Session creation failed"), EAutomationExpectedErrorFlags::Contains, -1);
@@ -663,6 +667,7 @@ void FPipelineModelImporterSpec::Define()
 		// Catches the report order contract: parse messages come before validator messages.
 		It("orders parse warnings before validator errors (missing_preprocessor)", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectCaseImportLogs(*this, TEXT("missing_preprocessor"), 1);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("missing_preprocessor"), Root, Case, Folder)) { return; }
@@ -677,6 +682,7 @@ void FPipelineModelImporterSpec::Define()
 		// even though its package settings are fine (the I/O check is what catches it).
 		It("leaves the failed model's transient copies out of the asset registry paths (FindPackage null)", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectCaseImportLogs(*this, TEXT("wrong_io_for_task"), 1);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("wrong_io_for_task"), Root, Case, Folder)) { return; }
@@ -697,6 +703,7 @@ void FPipelineModelImporterSpec::Define()
 			// Catches the importer carrying on after a folder parse error (e.g. reading bytes of a missing model).
 			It(FString::Printf(TEXT("fails %s with the parse code and creates nothing"), Id), [this, Id]()
 			{
+				UE::ModelPipelines::EditorTests::ExpectCaseImportLogs(*this, Id);
 				TSharedPtr<FJsonObject> Root, Case;
 				FString Folder;
 				if (!LoadCase(Id, Root, Case, Folder)) { return; }
@@ -710,6 +717,8 @@ void FPipelineModelImporterSpec::Define()
 		// Catches an exception/crash or a success on a nonexistent or empty source folder.
 		It("fails with FolderNotFound for a missing and an empty SourceFolder", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("FolderNotFound"), true, 2);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 2);
 			const FPipelineImportResult A = Run(Opts(FPaths::ProjectSavedDir() / TEXT("PipelinesTests/no_such_folder_") + DestGuid, TEXT("Nope")));
 			CheckFailedClean(A, TEXT("Nope"), TEXT("missing folder"));
 			TestTrue(*A.Report.ToString(), HasMsg(A.Report, ECode::FolderNotFound, ESev::Error));
@@ -725,6 +734,8 @@ void FPipelineModelImporterSpec::Define()
 		// Catches a second import replacing or modifying the first: same pointers, same fields, AssetExists.
 		It("fails the second import to the same path with AssetExists and leaves the first untouched", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("AssetExists"), true, 4);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 2);
 			TSharedPtr<FJsonObject> Root, Case, Case2;
 			FString Folder, Folder2;
 			if (!LoadCase(TEXT("tiny_text_classification"), Root, Case, Folder)) { return; }
@@ -754,6 +765,7 @@ void FPipelineModelImporterSpec::Define()
 		// Catches overwrite creating new objects (stale references in the project) or keeping the old fields.
 		It("overwrites in place: same pointers, fields from the new folder", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectLicenseWarnings(*this, true, true, true);
 			TSharedPtr<FJsonObject> Root, Case, Case2;
 			FString Folder, Folder2;
 			if (!LoadCase(TEXT("tiny_text_classification"), Root, Case, Folder)) { return; }
@@ -789,6 +801,7 @@ void FPipelineModelImporterSpec::Define()
 		// leave the old assets exactly as they were.
 		It("keeps the existing assets when an overwrite fails validation", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectCaseImportLogs(*this, TEXT("wrong_io_for_task"), 1);
 			TSharedPtr<FJsonObject> Root, Case, Bad;
 			FString Folder, BadFolder;
 			if (!LoadCase(TEXT("tiny_text_classification"), Root, Case, Folder)) { return; }
@@ -811,6 +824,8 @@ void FPipelineModelImporterSpec::Define()
 		// objects. (a) only the model asset exists, (b) both exist but the package slot holds a UNNEModelData.
 		It("reports AssetExists even with bOverwriteExisting when only one asset exists or a class differs", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("AssetExists"), true, 3);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 2);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("tiny_text_classification"), Root, Case, Folder)) { return; }
@@ -850,6 +865,8 @@ void FPipelineModelImporterSpec::Define()
 		// Catches a missing IsValidLongPackageName check: both must report InvalidDestination and create nothing.
 		It("reports InvalidDestination for 'NotAPath' and '/Game/bad path!'", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("InvalidDestination"), true, 4);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 2);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("tiny_text_classification"), Root, Case, Folder)) { return; }
@@ -869,6 +886,8 @@ void FPipelineModelImporterSpec::Define()
 		// Catches AssetName being used unchecked: a name with a space and '!' does not form a valid package name.
 		It("reports InvalidDestination for an AssetName that is not a valid package name", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("InvalidDestination"), true, 1);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 1);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("tiny_text_classification"), Root, Case, Folder)) { return; }
@@ -883,6 +902,8 @@ void FPipelineModelImporterSpec::Define()
 		// folder and a bad destination, the error is reported and no model was validated (no DeviceChecks).
 		It("rejects the destination before validating anything", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("InvalidDestination"), true, 2);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 1);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("tiny_text_classification"), Root, Case, Folder)) { return; }
@@ -927,6 +948,8 @@ void FPipelineModelImporterSpec::Define()
 		// Catches Options.Task being ignored: forcing TextEmbedding on an image folder fails at the tokenizer check.
 		It("fails tiny_image_classification with Task=TextEmbedding (MissingTokenizer) and creates nothing", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("MissingTokenizer"), true, 1);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 1);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("tiny_image_classification"), Root, Case, Folder)) { return; }
@@ -974,6 +997,7 @@ void FPipelineModelImporterSpec::Define()
 		// Catches ValidateSettings being gated by bValidate: settings are always checked, so the license warnings stay.
 		It("still runs the settings check with bValidate false (no_license warnings)", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectLicenseWarnings(*this, true, true, true);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("no_license"), Root, Case, Folder)) { return; }
@@ -993,6 +1017,10 @@ void FPipelineModelImporterSpec::Define()
 		// "exists on disk" check (a re-import after the objects are gone must still report AssetExists).
 		It("writes both .uasset files with bSave and sees them on disk afterwards", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("AssetExists"), true, 2);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 1);
+			// Engine noise, not ours: the registry sees the files this test saved over packages it deleted earlier.
+			AddExpectedMessage(TEXT("package was marked as deleted in editor, but has been modified on disk"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1, false);   // async registry rescan: count varies, may be 0
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("tiny_object_detection"), Root, Case, Folder)) { return; }
@@ -1063,6 +1091,7 @@ void FPipelineModelImporterSpec::Define()
 		// Catches a library wrapper that drops options or builds a different result than the free function.
 		It("ImportModelFolder gives the same result as ImportPipelineModelFolder", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectCaseImportLogs(*this, TEXT("wrong_io_for_task"), 2);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("tiny_text_classification"), Root, Case, Folder)) { return; }
@@ -1171,6 +1200,10 @@ void FPipelineModelImporterSpec::Define()
 		// with the listed errors and leave nothing in the project.
 		It("fails resnet_as_detection with MissingOutput + OutputRankMismatch and creates nothing", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("MissingOutput"), true, 1);
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("OutputRankMismatch"), true, 1);
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("UnverifiedDetectionFamily"), false, 1);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 1);
 			TSharedPtr<FJsonObject> Root, Case;
 			FString Folder;
 			if (!LoadCase(TEXT("resnet_as_detection"), Root, Case, Folder)) { return; }

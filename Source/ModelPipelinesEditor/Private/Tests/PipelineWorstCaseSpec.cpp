@@ -114,6 +114,8 @@ void FPipelineWorstCaseSpec::CheckWorstCaseFailure(const FString& Id, int32 Expe
 	// ORT logs its own error when it rejects the worst-case input; those lines are expected.
 	// Anchored so the pattern can never swallow this test's own assertion messages (review WP3.6c).
 	AddExpectedError(TEXT("^Non-zero status code returned while running"), EAutomationExpectedErrorFlags::Contains, -1);
+	UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("SmokeRunFailed"), true, 1);
+	UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 1);
 
 	FString Folder;
 	if (!LoadCaseFolder(Id, Folder)) { return; }
@@ -188,6 +190,8 @@ void FPipelineWorstCaseSpec::Define()
 		{
 			// Anchored so the pattern can never swallow this test's own assertion messages (review WP3.6c).
 			AddExpectedError(TEXT("^Non-zero status code returned while running"), EAutomationExpectedErrorFlags::Contains, -1);
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("SmokeRunFailed"), true, 2);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 2);
 			FString Folder;
 			if (!LoadCaseFolder(TEXT("small_vocab"), Folder)) { return; }
 			const FPipelineImportResult A = Import(Folder, TEXT("WC_Twice"), true);

@@ -261,6 +261,7 @@ void FPipelineImportMenuSpec::Define()
 		// and a failed import must leave no package, model or file behind.
 		It("rejects wrong_io_for_task with MissingInput and creates nothing", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectCaseImportLogs(*this, TEXT("wrong_io_for_task"), 1);
 			FString Folder;
 			if (!LoadCaseFolder(TEXT("wrong_io_for_task"), Folder)) { return; }
 			const FPipelineImportResult R = ImportFolderWithProgress(Folder, Dest, false, TOptional<bool>(false));
@@ -283,6 +284,8 @@ void FPipelineImportMenuSpec::Define()
 		// must come back as a failed result, not a check() or a modal dialog.
 		It("fails cleanly for a source folder that does not exist", [this]()
 		{
+			UE::ModelPipelines::EditorTests::ExpectImportFinding(*this, TEXT("FolderNotFound"), true, 1);
+			UE::ModelPipelines::EditorTests::ExpectImportFailed(*this, 1);
 			const FString Missing = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("PipelinesTests") / DestGuid / TEXT("does_not_exist"));
 			const FPipelineImportResult R = ImportFolderWithProgress(Missing, Dest, false, TOptional<bool>(false));
 			Imported.Add(R);

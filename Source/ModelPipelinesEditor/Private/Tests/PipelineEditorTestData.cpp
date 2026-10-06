@@ -111,6 +111,53 @@ namespace UE::ModelPipelines::EditorTests
 		DiscardOne(Result.Package.Get());
 		DiscardOne(Result.Model.Get());
 	}
+
+	void ExpectImportFinding(FAutomationTestBase& Test, const TCHAR* Code, bool bIsError, int32 Count)
+	{
+		Test.AddExpectedMessage(FString::Printf(TEXT("Import '.*': %s %s:"), bIsError ? TEXT("Error") : TEXT("Warning"), Code),
+			ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, Count, true);
+	}
+
+	void ExpectImportFailed(FAutomationTestBase& Test, int32 Count)
+	{
+		Test.AddExpectedMessage(TEXT("Import of '.*' failed: \\d+ errors?"), ELogVerbosity::Warning,
+			EAutomationExpectedMessageFlags::Contains, Count, true);
+	}
+
+	void ExpectCaseImportLogs(FAutomationTestBase& Test, const FString& Id, int32 Times)
+	{
+		if (Id == TEXT("wrong_io_for_task"))
+		{
+			ExpectImportFinding(Test, TEXT("MissingInput"), true, 2 * Times);
+			ExpectImportFinding(Test, TEXT("UnexpectedInput"), true, Times);
+			ExpectImportFinding(Test, TEXT("LabelCountMismatch"), true, Times);
+			ExpectImportFinding(Test, TEXT("OutputNameFallback"), false, Times);
+		}
+		else if (Id == TEXT("label_mismatch")) { ExpectImportFinding(Test, TEXT("LabelCountMismatch"), true, Times); }
+		else if (Id == TEXT("unknown_op")) { ExpectImportFinding(Test, TEXT("ModelCreateFailed"), true, Times); }
+		else if (Id == TEXT("missing_preprocessor"))
+		{
+			ExpectImportFinding(Test, TEXT("MissingPreprocessorConfig"), false, Times);
+			ExpectImportFinding(Test, TEXT("InputDimMismatch"), true, Times);
+		}
+		else if (Id == TEXT("missing_model"))
+		{
+			ExpectImportFinding(Test, TEXT("MissingModelFile"), true, Times);
+			ExpectImportFinding(Test, TEXT("MissingTokenizer"), true, Times);
+		}
+		else if (Id == TEXT("bad_config_json")) { ExpectImportFinding(Test, TEXT("InvalidJson"), true, Times); }
+		else if (Id == TEXT("no_task")) { ExpectImportFinding(Test, TEXT("TaskUndetected"), true, Times); }
+		else if (Id == TEXT("bad_id2label")) { ExpectImportFinding(Test, TEXT("InvalidLabels"), true, Times); }
+		else { return; }
+		ExpectImportFailed(Test, Times);
+	}
+
+	void ExpectLicenseWarnings(FAutomationTestBase& Test, bool bSpdx, bool bSource, bool bAttribution)
+	{
+		if (bSpdx) { ExpectImportFinding(Test, TEXT("LicenseSpdxMissing"), false); }
+		if (bSource) { ExpectImportFinding(Test, TEXT("LicenseSourceMissing"), false); }
+		if (bAttribution) { ExpectImportFinding(Test, TEXT("LicenseAttributionMissing"), false); }
+	}
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

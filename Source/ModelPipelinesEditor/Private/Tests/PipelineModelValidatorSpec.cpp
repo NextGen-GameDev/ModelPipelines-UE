@@ -437,6 +437,7 @@ void FPipelineModelValidatorSpec::Define()
 	{
 		It("TokenizerJson 'not json' -> Error TokenizerInvalid, no device checks", [this]()
 		{
+			AddExpectedMessagePlain(TEXT("UPipelineTokenizer::InitializeTokenizerFromJson: failed to parse tokenizer JSON"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 			FTestPackage T = BuildCase(TEXT("tiny_text_classification"));
 			if (!T.IsOk()) { AddError(T.Error); return; }
 			T.Package->TokenizerJson = TEXT("not json");
@@ -448,6 +449,7 @@ void FPipelineModelValidatorSpec::Define()
 
 		It("TokenizerJson '{}' (valid JSON, not a tokenizer) -> Error TokenizerInvalid, no device checks", [this]()
 		{
+			AddExpectedMessagePlain(TEXT("UPipelineTokenizer::InitializeTokenizerFromJson: failed to parse tokenizer JSON"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 			// Catches a check that only tests "is it JSON" instead of loading the tokenizer.
 			FTestPackage T = BuildCase(TEXT("tiny_text_embedding"));
 			if (!T.IsOk()) { AddError(T.Error); return; }
@@ -605,6 +607,7 @@ void FPipelineModelValidatorSpec::Define()
 
 		It("a failing package (bad tokenizer) is unchanged too", [this]()
 		{
+			AddExpectedMessagePlain(TEXT("UPipelineTokenizer::InitializeTokenizerFromJson: failed to parse tokenizer JSON"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 			FTestPackage T = BuildCase(TEXT("tiny_text_classification"));
 			if (!T.IsOk()) { AddError(T.Error); return; }
 			T.Package->TokenizerJson = TEXT("not json");

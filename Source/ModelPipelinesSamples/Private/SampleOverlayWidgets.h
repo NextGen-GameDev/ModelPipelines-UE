@@ -10,6 +10,7 @@
 #include "Widgets/SWidget.h"
 
 class AActor;
+class AModelPipelinesSampleBase;
 class UObject;
 class USceneCaptureComponent2D;
 class UTextureRenderTarget2D;
@@ -23,8 +24,19 @@ namespace UE::ModelPipelines::Samples
 	/** Text line (optionally bound to a getter). */
 	TSharedRef<SWidget> MakeTextLine(const TAttribute<FText>& Text, const FLinearColor& Color = FLinearColor::White, float Size = 18.f, bool bBold = false);
 
-	/** Dark translucent panel at the top-left of the viewport: Title, Body, then the status line. */
-	TSharedRef<SWidget> MakePanel(const FText& Title, const TSharedRef<SWidget>& Body, const TAttribute<FText>& Status);
+	/** Panel width (Slate units) of the text samples: no photo in the view, long result sentences read best on few lines. */
+	inline constexpr float TextPanelWidth = 760.f;
+
+	/** Panel width of the vision samples: a left column that stays clear of the photo board at the map's player start (the board
+	    starts at about 30 % of the view width; 40 + 460 units end near 28 % at 1920x1080). Holds the 256-unit classifier preview. */
+	inline constexpr float VisionPanelWidth = 460.f;
+
+	/** Dark translucent panel at the top-left of the viewport (40 units from the edges, Width units wide, height follows the
+	    content): Title, Body, then the status line (wraps). */
+	TSharedRef<SWidget> MakePanel(const FText& Title, const TSharedRef<SWidget>& Body, const TAttribute<FText>& Status, float Width = TextPanelWidth);
+
+	/** Status line bound to Sample->GetStatusText() (read every frame; empty once the sample is gone). */
+	TAttribute<FText> MakeStatusAttribute(const AModelPipelinesSampleBase* Sample);
 
 	/** Single-line text box with a hint; Enter calls OnCommitted (focus stays in the box). */
 	TSharedRef<SEditableTextBox> MakeInputBox(const FText& Hint, FOnTextCommitted OnCommitted);

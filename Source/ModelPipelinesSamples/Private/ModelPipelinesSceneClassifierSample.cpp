@@ -152,7 +152,9 @@ TSharedRef<SWidget> AModelPipelinesSceneClassifierSample::BuildOverlay()
 
 	// The widget holds its own reference to the brush, so it stays valid as long as the widget draws it.
 	const TSharedPtr<FSlateBrush> Brush = PreviewBrush;
-	return MakeOverlayPanel(
+	// Narrow left column (VisionPanelWidth): the panel must not cover the photo board in the middle of the view.
+	using namespace UE::ModelPipelines::Samples;
+	return MakePanel(GetOverlayTitle(),
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
 		[
@@ -167,7 +169,8 @@ TSharedRef<SWidget> AModelPipelinesSceneClassifierSample::BuildOverlay()
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 12.f, 0.f, 0.f)
 		[
 			SAssignNew(LabelList, SVerticalBox)
-		]);
+		],
+		MakeStatusAttribute(this), VisionPanelWidth);
 }
 
 void AModelPipelinesSceneClassifierSample::RefreshOverlay()

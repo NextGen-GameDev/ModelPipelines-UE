@@ -222,7 +222,8 @@ FText AModelPipelinesDetectionSample::GetOverlayTitle() const
 TSharedRef<SWidget> AModelPipelinesDetectionSample::BuildOverlay()
 {
 	// The box layer fills the viewport and draws inside the player's view rect (the capture has that rect's aspect and the view's FOV);
-	// the status panel sits on top, top-left.
+	// the status panel sits on top, top-left, in a narrow column (VisionPanelWidth) that stays clear of the photo board.
+	using namespace UE::ModelPipelines::Samples;
 	return SNew(SOverlay)
 		+ SOverlay::Slot().HAlign(HAlign_Fill).VAlign(VAlign_Fill)
 		[
@@ -230,7 +231,7 @@ TSharedRef<SWidget> AModelPipelinesDetectionSample::BuildOverlay()
 		]
 		+ SOverlay::Slot().HAlign(HAlign_Fill).VAlign(VAlign_Fill)
 		[
-			MakeOverlayPanel(SNullWidget::NullWidget)
+			MakePanel(GetOverlayTitle(), SNullWidget::NullWidget, MakeStatusAttribute(this), VisionPanelWidth)
 		];
 }
 

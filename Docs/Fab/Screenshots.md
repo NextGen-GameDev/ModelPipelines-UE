@@ -33,3 +33,18 @@ Free listings usually still need images. TODO(Noah): check the minimum count.
 | 4 | Error handling | Blueprint printing **Get Last Error** after loading bad JSON | Output Log and graph | Bad input returns an error message, not a crash. |
 | 5 | Plugins window | **Edit > Plugins**, search "Tokenizers", category **AI** | The plugin row with the Tokenizers entry | Enable it in the Plugins window. |
 | 6 | Test run | Session Frontend, Automation tab, `Tokenizers` tests passing | Test list, all green | Automation tests included. TODO(Noah): re-run before capture so the count (86 on 2026-09-30) is current. |
+
+## Capture status (2026-10-06, WP8.1)
+
+Captured PNGs and the manual checklist are in the private folder `.pipelines-dev/fab-shots/` (not in the repo).
+
+| Shot | Status |
+|---|---|
+| Model Pipelines 1, 2, 3, 4 | captured (PIE, scripted) |
+| Model Pipelines 5 (import menu) | manual |
+| Model Pipelines 6 (package details) | captured |
+| Model Pipelines 7 (Blueprint graph) | captured (demo graph, not the sample's own) |
+| Model Pipelines 8 | skipped (Noah's) |
+| Tokenizers 1, 3, 4, 5 | captured (3 shows the Encode Batch node and its Out Batch pin; 4 shows the graph only) |
+| Tokenizers 2 (encode result) | manual |
+| Tokenizers 6 | dropped (release zips contain no tests) |

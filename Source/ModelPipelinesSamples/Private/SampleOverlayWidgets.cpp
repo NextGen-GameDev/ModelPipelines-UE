@@ -11,6 +11,7 @@
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
+#include "ModelPipelinesSampleBase.h"
 #include "SceneView.h"
 #include "Slate/SceneViewport.h"
 #include "Styling/CoreStyle.h"
@@ -35,7 +36,7 @@ namespace UE::ModelPipelines::Samples
 			.AutoWrapText(true);
 	}
 
-	TSharedRef<SWidget> MakePanel(const FText& Title, const TSharedRef<SWidget>& Body, const TAttribute<FText>& Status)
+	TSharedRef<SWidget> MakePanel(const FText& Title, const TSharedRef<SWidget>& Body, const TAttribute<FText>& Status, float Width)
 	{
 		// The viewport overlay fills the screen; the box pins a fixed-width panel to the top-left corner.
 		return SNew(SBox)
@@ -44,7 +45,7 @@ namespace UE::ModelPipelines::Samples
 			.Padding(FMargin(40.f))
 			[
 				SNew(SBox)
-				.WidthOverride(760.f)
+				.WidthOverride(FMath::Max(Width, 200.f))
 				[
 					SNew(SBorder)
 					.BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
@@ -67,6 +68,15 @@ namespace UE::ModelPipelines::Samples
 					]
 				]
 			];
+	}
+
+	TAttribute<FText> MakeStatusAttribute(const AModelPipelinesSampleBase* Sample)
+	{
+		return TAttribute<FText>::CreateLambda([WeakSample = TWeakObjectPtr<const AModelPipelinesSampleBase>(Sample)]()
+		{
+			const AModelPipelinesSampleBase* Self = WeakSample.Get();
+			return Self ? FText::FromString(Self->GetStatusText()) : FText::GetEmpty();
+		});
 	}
 
 	TSharedRef<SEditableTextBox> MakeInputBox(const FText& Hint, FOnTextCommitted OnCommitted)

@@ -70,6 +70,7 @@ def validate_doc(doc):
         sha = e.get("sha256") or ""
         if len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
             bad.append("%s: sha256 is not 64 lowercase hex digits" % tag)
+        bad += ["%s: %s" % (tag, m) for m in validate_crop(e.get("crop"))]
         ex = e.get("expect") or {}
         if e.get("purpose") == "classify":
             if not ex.get("top1_any_of") or not isinstance(ex.get("min_score"), (int, float)):
@@ -85,11 +86,34 @@ def validate_doc(doc):
     return bad
 
 
-def resize_to_png(src, dst):
-    """RGB, long edge <= MAX_SIDE (LANCZOS, aspect kept); returns (width, height)."""
+def validate_crop(crop, size=None):
+    """Problems (list of str) with an optional crop [left, top, right, bottom] in source pixels; size = (w, h) if known."""
+    if crop is None:
+        return []
+    if not isinstance(crop, (list, tuple)) or len(crop) != 4             or any(isinstance(v, bool) or not isinstance(v, int) for v in crop):
+        return ["crop must be 4 integers [left, top, right, bottom]"]
+    left, top, right, bottom = crop
+    bad = []
+    if left < 0 or top < 0:
+        bad.append("crop left/top must be >= 0")
+    if left >= right or top >= bottom:
+        bad.append("crop needs left < right and top < bottom")
+    if size is not None and (right > size[0] or bottom > size[1]):
+        bad.append("crop %s is outside the source image %dx%d" % (list(crop), size[0], size[1]))
+    return bad
+
+
+def resize_to_png(src, dst, crop=None):
+    """RGB, optional crop box (source pixels, applied first), long edge <= MAX_SIDE (LANCZOS, aspect kept);
+    returns (width, height)."""
     from PIL import Image
     with Image.open(src) as im:
         im = im.convert("RGB")
+        bad = validate_crop(crop, im.size)
+        if bad:
+            raise SystemExit("FAIL: " + "; ".join(bad))
+        if crop is not None:
+            im = im.crop(tuple(crop))
         w, h = im.size
         if max(w, h) > MAX_SIDE:
             s = MAX_SIDE / float(max(w, h))
@@ -153,9 +177,10 @@ def fetch_all(doc, out_dir, cache_dir):
                 f.write(data)
             how = "downloaded"
         dst = os.path.join(out_dir, e["name"] + ".png")
-        size = resize_to_png(src, dst)
-        print("%-22s %-10s sha256 ok  %-7s %dx%d  %s  by %s" % (e["name"], how, e["license"], size[0], size[1],
-                                                               e["page_url"], e["author"]))
+        size = resize_to_png(src, dst, e.get("crop"))
+        crop_txt = ("  crop %s" % list(e["crop"])) if e.get("crop") else ""
+        print("%-22s %-10s sha256 ok  %-7s %dx%d%s  %s  by %s" % (e["name"], how, e["license"], size[0], size[1],
+                                                                 crop_txt, e["page_url"], e["author"]))
         paths[e["name"]] = dst
     return paths
 

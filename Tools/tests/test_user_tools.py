@@ -135,6 +135,8 @@ def test_fetch_all_resizes_and_verifies(tmp_path, monkeypatch):
     doc = load_doc()
     sizes = [(2000, 1000), (500, 700), (1024, 1024), (1500, 3000), (64, 48), (1025, 10)]
     blobs = {}
+    for e in doc["images"]:
+        e.pop("crop", None)  # the real crop box does not fit these synthetic sizes (crop has its own test)
     for e, (w, h) in zip(doc["images"], sizes):
         b = make_jpeg_bytes(w, h)
         e["file_url"] = "https://example.invalid/%s.jpg" % e["name"]

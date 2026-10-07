@@ -30,6 +30,8 @@ The photos on the vision sample boards are CC0 or public domain, from Wikimedia 
 | detect_dog_walk | Detection | Tomwsulcer | CC0-1.0 | [page](https://commons.wikimedia.org/wiki/File:Fort_Greene_Brooklyn_NY_assorted_photos_near_Fulton_Street_2_lady_walking_four_dogs.jpg) |
 | detect_street_market | Detection | Syced | CC0-1.0 | [page](https://commons.wikimedia.org/wiki/File:Street_market_in_Hanoi,_2003_July_41.jpg) |
 
+The classify_jellyfish photo is cropped (56,10 to 1052,1380 of the 1052x1380 original) to remove screenshot borders and a carousel button; CC0 allows this.
+
 ## Choosing models for your game
 
 1. Open the model card on Hugging Face and read the license before you ship the model.

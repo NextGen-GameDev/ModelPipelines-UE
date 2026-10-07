@@ -10,6 +10,8 @@
    "license": "CC0-1.0",
    "license_source": "CC0",
    "author": "CGiblets",
+   "crop": [56, 10, 1052, 1380],
+   "crop_reason": "source is a web-page screenshot: black strip on the left/top edges and a white carousel button at left mid-height",
    "expect": {"top1_any_of": ["jellyfish"], "min_score": 0.5}
   },
   {

@@ -27,24 +27,26 @@ Free listings usually still need images. TODO(Noah): check the minimum count.
 
 | # | Show | Where | Framing | Caption |
 |---|---|---|---|---|
-| 1 | Blueprint graph: load, encode, decode | A Blueprint with **Construct Object from Class** (Tokenizer Wrapper), **Initialize Tokenizer From File**, **Encode**, **Decode** | Whole graph, readable pin names | Load a tokenizer.json and encode text in four nodes. |
+| 1 | Blueprint graph: load, encode, decode | A Blueprint that creates a Tokenizer Wrapper (small helper function), then **Initialize Tokenizer From File**, **Encode**, **Decode** | Whole graph, readable pin names | Load a tokenizer.json and encode text in four nodes. |
 | 2 | Encode result | Same Blueprint, **Print String** of the ids after a play-in-editor run | Viewport with printed ids next to the graph | Token ids from a Hugging Face tokenizer.json. |
 | 3 | Padded batch | C++ snippet or Blueprint calling `EncodeBatch` | Code or graph showing `InputIds` and `AttentionMask` | Padded, truncated batches with an attention mask. |
 | 4 | Error handling | Blueprint printing **Get Last Error** after loading bad JSON | Output Log and graph | Bad input returns an error message, not a crash. |
 | 5 | Plugins window | **Edit > Plugins**, search "Tokenizers", category **AI** | The plugin row with the Tokenizers entry | Enable it in the Plugins window. |
 | 6 | Test run | Session Frontend, Automation tab, `Tokenizers` tests passing | Test list, all green | Automation tests included. TODO(Noah): re-run before capture so the count (86 on 2026-09-30) is current. |
 
-## Capture status (2026-10-06, WP8.1)
+## Capture status (2026-10-07, WP8.3 re-capture)
 
-Captured PNGs and the manual checklist are in the private folder `.pipelines-dev/fab-shots/` (not in the repo).
+Captured PNGs and the manual checklist are in the private folder `.pipelines-dev/fab-shots/` (not in the repo). WP8.1 versions are in its `v1/` folder.
 
 | Shot | Status |
 |---|---|
-| Model Pipelines 1, 2, 3, 4 | captured (PIE, scripted) |
-| Model Pipelines 5 (import menu) | manual |
+| Model Pipelines 1, 2 | captured (PIE, scripted; camera pitched so the floor is about a quarter of the frame) |
+| Model Pipelines 3 (scene classifier) | captured (soccer ball board, top label soccer ball 100.0%) |
+| Model Pipelines 4 (detection) | captured (dog-walk board centred) |
+| Model Pipelines 5 (import menu) | manual (the editor window did not react to scripted or real clicks again) |
 | Model Pipelines 6 (package details) | captured |
-| Model Pipelines 7 (Blueprint graph) | captured (demo graph, not the sample's own) |
+| Model Pipelines 7 (Blueprint graph) | captured (demo graph, not the sample's own; Package comes from a variable) |
 | Model Pipelines 8 | skipped (Noah's) |
-| Tokenizers 1, 3, 4, 5 | captured (3 shows the Encode Batch node and its Out Batch pin; 4 shows the graph only) |
+| Tokenizers 1, 3, 4, 5 | captured (1 and 3 and 4 create the object in a small `Create Tokenizer` function, so the caption's "Construct Object from Class" node is not on screen; 3 breaks the batch to show `Input Ids` and `Attention Mask`; 4 shows the graph plus the Output Log lines from a play-in-editor run) |
 | Tokenizers 2 (encode result) | manual |
 | Tokenizers 6 | dropped (release zips contain no tests) |

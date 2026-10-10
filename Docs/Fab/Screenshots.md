@@ -1,8 +1,6 @@
-# Fab screenshots: shot list (DRAFT)
+# Fab screenshots: shot list
 
-DRAFT for Noah. This is a plan. Nothing is captured yet. Capture later, after the sample maps work with the sample models imported.
-
-Resolution and format: TODO(Noah): check Fab's current image size, aspect ratio, file type and count limits in the publisher portal. Until then, capture at 1920x1080 or larger, 16:9, PNG, and crop later.
+Resolution and format: captured at 1920x1080, 16:9, PNG. Check Fab's size, file type and count limits in the publisher portal at upload.
 
 General framing: hide the editor panels you do not need, use a clean dark theme, no personal paths in the Output Log, and no other plugins visible.
 
@@ -19,11 +17,7 @@ General framing: hide the editor panels you do not need, use a clean dark theme,
 | 7 | Blueprint graph with async nodes | Blueprint in `L_SemanticSearch` (or a scratch graph) with **Embed Texts** and the result pins | Graph editor, zoomed so pin names are readable | Call a model with one Blueprint node. |
 | 8 | MCP tools in Claude Code | Claude Code with the Unreal MCP server, UE 5.8, asking to list or benchmark models | Terminal window showing the tool call and the result | Optional: let an AI agent import, validate and benchmark models. UE 5.8 only. |
 
-Optional extra: the validation result after import (tokenizer, CPU and GPU creation, smoke run). TODO(Noah): decide whether to use it as a ninth shot.
-
 ## Tokenizers (6 shots)
-
-Free listings usually still need images. TODO(Noah): check the minimum count.
 
 | # | Show | Where | Framing | Caption |
 |---|---|---|---|---|
@@ -32,7 +26,6 @@ Free listings usually still need images. TODO(Noah): check the minimum count.
 | 3 | Padded batch | C++ snippet or Blueprint calling `EncodeBatch` | Code or graph showing `InputIds` and `AttentionMask` | Padded, truncated batches with an attention mask. |
 | 4 | Error handling | Blueprint printing **Get Last Error** after loading bad JSON | Output Log and graph | Bad input returns an error message, not a crash. |
 | 5 | Plugins window | **Edit > Plugins**, search "Tokenizers", category **AI** | The plugin row with the Tokenizers entry | Enable it in the Plugins window. |
-| 6 | Test run | Session Frontend, Automation tab, `Tokenizers` tests passing | Test list, all green | Automation tests included. TODO(Noah): re-run before capture so the count (86 on 2026-09-30) is current. |
 
 ## Capture status (2026-10-07, WP8.3 re-capture)
 

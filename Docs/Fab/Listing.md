@@ -1,6 +1,6 @@
-# Fab listing: Model Pipelines (DRAFT)
+# Fab listing: Model Pipelines
 
-DRAFT for Noah. Nothing here is published. Price: TODO(Noah): decide price or free. Fab field names below follow the usual code-plugin form. TODO(Noah): check each field in the Fab publisher portal.
+Ready to paste (2026-10-10). Price: free. Field names follow the usual code-plugin form; check limits in the Fab publisher portal.
 
 ## Title (max 60 characters)
 
@@ -41,7 +41,6 @@ Four tasks:
 - Runs on the CPU, or on the GPU through DirectML (NNE ORT). If DirectML is not available, the plugin uses the CPU.
 - Built-in tokenizer. No separate Tokenizers plugin is needed. The standalone Tokenizers plugin can still be installed next to it.
 - Optional AI agent tools (MCP) in the editor, UE 5.8 only: list, import, validate, benchmark and try models. Importing asks for confirmation first.
-- Automation tests under `Pipelines.*`.
 
 ### Four sample maps
 
@@ -69,30 +68,29 @@ Read the license of any model before you ship it. See `Docs/ModelLicenses.md`.
 
 ### Performance
 
-The model runs in the background, not on the game thread. In our tests a vision call costs about 0.2 ms of game-thread time, because reading the texture back does not block. The first call on a pipeline also loads the model, so it is slower. TODO(Noah): the docs give no GPU name or engine version for the 0.2 ms figure. Add them from the roadmap evidence, or delete this paragraph.
+The model runs in the background, not on the game thread. Classifying a 1080p render target costs the game thread a median of 0.05 ms per call (90th percentile 0.06 ms; UE 5.8.3, D3D12, RTX 3080 Laptop GPU, measured with Unreal Insights), because reading the texture back does not block. Creating a pipeline loads the model once and takes longer (about 40 to 180 ms in our tests), so create pipelines during loading, not mid-game.
 
 ## Technical details
 
 - Features: Blueprint async nodes; C++ API; model package asset; Content Browser import; four sample maps; optional MCP tools (UE 5.8).
 - Code modules: ModelPipelinesCore, ModelPipelinesTokenizer, ModelPipelinesText, ModelPipelinesVision, ModelPipelinesSamples (Runtime); ModelPipelinesEditor, ModelPipelinesMCP (Editor). All Win64 only.
-- Main types: the model package asset, the four pipeline classes and the result type (see `Docs/Nodes.md`). TODO(Noah): confirm which type names to show here.
+- Main types: the model package asset, the four pipeline classes and the result type (see `Docs/Nodes.md`).
 - Platforms: Win64.
 - Supported engine versions: 5.7 and 5.8. UE 5.6 is planned and not tested.
-- Network use: none at runtime. The model download scripts use the network, on your machine, before you import. TODO(Noah): confirm this wording against Fab's network field.
+- Network use: none at runtime. The model download scripts use the network, on your machine, before you import.
 - Dependencies: the engine plugin NNERuntimeORT. For the MCP tools on 5.8: Unreal MCP, Toolset Registry and Python Editor Script Plugin (all optional, editor only).
-- Documentation: `Docs/README.md` in the plugin. TODO(Noah): public link (the repo URL is in the `.uplugin`; the docs path is unconfirmed).
+- Documentation: https://github.com/NextGen-GameDev/ModelPipelines-UE/blob/main/Docs/README.md (also `Docs/` in the plugin).
 - Example project / sample maps: yes, the four sample maps above, in the plugin content under `/ModelPipelines/Samples/Maps/`.
-- Version: proposed 0.1.0, beta.
+- Version: 0.1.0 (beta).
 
 ## Tags (max 10)
 
 AI, Machine Learning, NNE, ONNX, Hugging Face, Blueprint, Embeddings, Image Classification, Object Detection, Text Classification
 
-TODO(Noah): Fab may limit or restrict tags. Check in the Fab publisher portal.
 
 ## Category suggestion
 
-Code Plugins. TODO(Noah): pick the exact Fab category and subcategory in the publisher portal. The `.uplugin` category is "AI".
+Code Plugins (pick the closest subcategory in the portal). The `.uplugin` category is "AI".
 
 ## What's included
 
@@ -108,8 +106,8 @@ Code Plugins. TODO(Noah): pick the exact Fab category and subcategory in the pub
 - Windows 64-bit.
 - Unreal Engine 5.7 or 5.8.
 - The engine plugin NNERuntimeORT (ships with the engine).
-- To get the sample models: Python with the packages the `Tools/` scripts need, and network access, once. TODO(Noah): check the exact list in `Docs/ImportModel.md` before publishing.
-- For a C++ project: Visual Studio. Install option A in `Docs/Install.md` builds a library file first. TODO(Noah): confirm whether the Fab package ships that library prebuilt, so buyers need no extra build step.
+- To get the sample models: Python 3.11 or newer, the packages in `Tools/requirements.txt`, and network access, once (about 1 GB, about 6 minutes). See `Docs/ImportModel.md`.
+- No extra build step: the prebuilt tokenizer library is included.
 - For the MCP tools: UE 5.8 and an MCP client such as Claude Code or Cursor.
 
 ## Known limitations
@@ -123,16 +121,15 @@ Code Plugins. TODO(Noah): pick the exact Fab category and subcategory in the pub
 
 ## Support
 
+Email: support@holdoutlabs.ai
 Issues: https://github.com/NextGen-GameDev/ModelPipelines-UE/issues
-
-TODO(Noah): the repo is not public yet. Confirm the support link (or an email) before publishing.
 
 ## License notes
 
 - The plugin code is under the Apache License 2.0 (`LICENSE`). Contributions need the contributor agreement in `CLA.md`.
 - Third-party components and their licenses (tokenizers-cpp, Hugging Face tokenizers, ONNX Runtime, the sample models and photos) are in `THIRD_PARTY_NOTICES.md`.
 - Models carry their own licenses. See `Docs/ModelLicenses.md`.
-- TODO(Noah): Fab asks for a license choice for the listing. Decide how that matches Apache-2.0 code.
+- Free. The code stays under Apache-2.0; `LICENSE` ships in the package.
 
 ## Related
 

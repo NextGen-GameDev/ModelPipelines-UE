@@ -20,7 +20,13 @@ enum class EPipelineTask : uint8
 	TextEmbedding = 1,
 	TextClassification = 2,
 	ImageClassification = 3,
-	ObjectDetection = 4
+	ObjectDetection = 4,
+	/** M8: text generation with a GGUF model. */
+	TextGeneration = 5,
+	/** M9: reserved, no pipeline yet. */
+	SpeechToText = 6,
+	/** M10: reserved, no pipeline yet. */
+	TextToSpeech = 7
 };
 
 /** How token embeddings are pooled into one sentence embedding. */
@@ -78,8 +84,11 @@ MODELPIPELINESCORE_API bool IsTextTask(EPipelineTask Task);
 /** True for ImageClassification and ObjectDetection. */
 MODELPIPELINESCORE_API bool IsImageTask(EPipelineTask Task);
 
-/** True for every task except TextEmbedding and None. */
+/** True for TextClassification, ImageClassification and ObjectDetection. */
 MODELPIPELINESCORE_API bool TaskUsesLabels(EPipelineTask Task);
+
+/** True for TextGeneration, SpeechToText and TextToSpeech. */
+MODELPIPELINESCORE_API bool IsGenerativeTask(EPipelineTask Task);
 
 /** Pre-processing settings of a model package. */
 USTRUCT(BlueprintType)
@@ -164,6 +173,34 @@ struct MODELPIPELINESCORE_API FPipelinePostprocessSettings
 	int32 MaxDetections = 100;
 };
 
+/** Load-time settings of a generative model (they shape the model and its context). docs/contracts.md C60d. */
+USTRUCT(BlueprintType)
+struct MODELPIPELINESCORE_API FPipelineGenerationModelSettings
+{
+	GENERATED_BODY()
+
+	/** Context length in tokens (prompt + generated). 0 = min(model's training context, 4096). Clamp 0..131072. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Generation", meta = (ClampMin = 0, ClampMax = 131072))
+	int32 ContextLength = 0;
+
+	/** Layers offloaded to the GPU when the device is GPU: -1 = all, 0 = none (CPU). Ignored on CPU. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Generation", meta = (ClampMin = -1))
+	int32 GpuLayers = -1;
+
+	/** Empty = the GGUF's own tokenizer.chat_template. Otherwise a llama.cpp built-in template name ("chatml", "llama3", ...). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Generation")
+	FString ChatTemplateOverride;
+
+	/** CPU threads for generation. 0 = number of physical cores, at most 8. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Generation", meta = (ClampMin = 0, ClampMax = 64))
+	int32 Threads = 0;
+
+	/** Conversations on one model that keep a cache at once (each holds a llama context). The least recently used one
+	    beyond this loses its cache (its next turn evaluates the whole history; nothing else changes). 1..64. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Generation", meta = (ClampMin = 1, ClampMax = 64))
+	int32 MaxCachedConversations = 4;
+};
+
 /** License record of the packaged model. */
 USTRUCT(BlueprintType)
 struct MODELPIPELINESCORE_API FPipelineModelLicense
@@ -198,6 +235,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pipeline")
 	TObjectPtr<UNNEModelData> Model;
 
+	/** GGUF models (TextGeneration). Exactly one of Model / GgufModel is set. Typed as UDataAsset so Core needs no
+	    dependency on ModelPipelinesLlama; it must be a UPipelineGgufModel (an IPipelineFileModel). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pipeline")
+	TObjectPtr<UDataAsset> GgufModel;
+
 	/** Full tokenizer.json text; not shown in the details panel (megabytes). */
 	UPROPERTY(BlueprintReadOnly, Category = "Pipeline")
 	FString TokenizerJson;
@@ -222,8 +264,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pipeline")
 	EPipelineDevice PreferredDevice = EPipelineDevice::Auto;
 
+	/** Load-time settings of a generative model. Unused for NNE models. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation")
+	FPipelineGenerationModelSettings Generation;
+
+	/** Game thread. NNE if Model set, GGUF if GgufModel set (and it is an IPipelineFileModel), None if neither or both. */
+	EPipelineModelFormat GetModelFormat() const;
+
 	/**
-	 * Settings only: loads neither model nor tokenizer. Appends messages (codes 2..14) to OutReport.
+	 * Settings only: loads neither model nor tokenizer nor GGUF file. Appends messages (codes 2..18) to OutReport.
 	 * Returns true when this call added no Error. Does not modify the package.
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintPure = false, Category = "Pipelines")

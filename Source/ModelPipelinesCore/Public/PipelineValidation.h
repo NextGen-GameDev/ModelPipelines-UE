@@ -50,6 +50,14 @@ enum class EPipelineValidationCode : uint8
 	LicenseAttributionMissing = 13,
 	/** Error: ObjectDetection and NmsIouThreshold NaN or < 0, or MaxDetections outside 1..10000. */
 	InvalidPostprocess = 14,
+	/** Error: both Model and GgufModel are set. */
+	BothModelsSet = 15,
+	/** Error: TextGeneration with an NNE Model, or a non-generative task with a GgufModel. */
+	WrongModelFormat = 16,
+	/** Error: GgufModel does not implement IPipelineFileModel, its path is invalid, SizeBytes <= 0 or Sha256 is not 64 hex digits. */
+	InvalidGgufModel = 17,
+	/** Warning: License.SpdxId is not Apache-2.0, MIT, BSD-2-Clause or BSD-3-Clause (case-insensitive). */
+	LicenseNotPermissive = 18,
 	// task I/O (ResolvePipelineTaskIO, WP2.3)
 	/** Error: an expected model input is absent. */
 	MissingInput = 20,
@@ -117,6 +125,15 @@ enum class EPipelineValidationCode : uint8
 	AssetExists = 66,
 	/** Error: saving the package failed. */
 	SaveFailed = 67,
+	// GGUF files (editor validator, M8)
+	/** Error: the GGUF file does not exist. */
+	GgufFileMissing = 68,
+	/** Error: the GGUF file size differs from SizeBytes. */
+	GgufSizeMismatch = 69,
+	/** Error: the GGUF file SHA-256 differs from Sha256. */
+	GgufShaMismatch = 70,
+	/** Warning: the project does not stage Content/Models as NonUFS. */
+	ModelsNotStagedNonUfs = 71,
 };
 
 /** Enumerator name of a validation code, e.g. "MissingInput"; "Unknown" for a value outside the enum. */

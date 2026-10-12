@@ -39,6 +39,19 @@ enum class EPipelineError : uint8
 	Internal = 9,
 	/** (M3+) Tokenizer or image preprocessing failed (tokenizer did not load, EncodeBatch failed). */
 	PreprocessFailed = 10,
+	/** (M8+) The prompt (plus at least one new token) does not fit the context length. */
+	ContextOverflow = 11,
+};
+
+/** Storage format of a package's model (docs/contracts.md C60c). */
+UENUM(BlueprintType)
+enum class EPipelineModelFormat : uint8
+{
+	None = 0,
+	/** UNNEModelData (ONNX through NNE). */
+	NNE = 1,
+	/** A loose .gguf file described by a pointer asset implementing IPipelineFileModel. */
+	GGUF = 2
 };
 
 /** Result returned by every pipeline API. A default-constructed result is a failure with Error None. */

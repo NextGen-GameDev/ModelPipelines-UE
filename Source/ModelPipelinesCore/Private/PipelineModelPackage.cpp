@@ -2,6 +2,7 @@
 
 #include "PipelineModelPackage.h"
 #include "Misc/CString.h"
+#include "PipelineModelSource.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(PipelineModelPackage)
 
@@ -20,7 +21,34 @@ namespace PipelineModelPackagePrivate
 		EPipelineTask::TextClassification,
 		EPipelineTask::ImageClassification,
 		EPipelineTask::ObjectDetection,
+		EPipelineTask::TextGeneration,
+		EPipelineTask::SpeechToText,
+		EPipelineTask::TextToSpeech,
 	};
+
+	/** SPDX ids accepted without a LicenseNotPermissive warning (compared case-insensitively). */
+	static const TCHAR* PermissiveSpdxIds[] = {
+		TEXT("Apache-2.0"),
+		TEXT("MIT"),
+		TEXT("BSD-2-Clause"),
+		TEXT("BSD-3-Clause"),
+	};
+
+	static bool IsSha256Hex(const FString& Str)
+	{
+		if (Str.Len() != 64)
+		{
+			return false;
+		}
+		for (const TCHAR Ch : Str)
+		{
+			if (!FChar::IsHexDigit(Ch))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
 
 	static bool IsBlank(const FString& Str)
 	{
@@ -57,6 +85,9 @@ const TCHAR* LexToString(EPipelineTask Task)
 	case EPipelineTask::TextClassification: return TEXT("TextClassification");
 	case EPipelineTask::ImageClassification: return TEXT("ImageClassification");
 	case EPipelineTask::ObjectDetection: return TEXT("ObjectDetection");
+	case EPipelineTask::TextGeneration: return TEXT("TextGeneration");
+	case EPipelineTask::SpeechToText: return TEXT("SpeechToText");
+	case EPipelineTask::TextToSpeech: return TEXT("TextToSpeech");
 	default: return TEXT("Unknown");
 	}
 }
@@ -95,6 +126,33 @@ bool TaskUsesLabels(EPipelineTask Task)
 		|| Task == EPipelineTask::ObjectDetection;
 }
 
+bool IsGenerativeTask(EPipelineTask Task)
+{
+	return Task == EPipelineTask::TextGeneration
+		|| Task == EPipelineTask::SpeechToText
+		|| Task == EPipelineTask::TextToSpeech;
+}
+
+EPipelineModelFormat UPipelineModelPackage::GetModelFormat() const
+{
+	const bool bHasNne = Model != nullptr;
+	const bool bHasGguf = GgufModel != nullptr;
+	if (bHasNne == bHasGguf)
+	{
+		return EPipelineModelFormat::None;
+	}
+	if (bHasNne)
+	{
+		return EPipelineModelFormat::NNE;
+	}
+	const IPipelineFileModel* File = Cast<IPipelineFileModel>(GgufModel.Get());
+	if (File == nullptr || File->GetFileFormat() != EPipelineModelFormat::GGUF)
+	{
+		return EPipelineModelFormat::None;
+	}
+	return EPipelineModelFormat::GGUF;
+}
+
 bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutReport) const
 {
 	using namespace PipelineModelPackagePrivate;
@@ -110,16 +168,64 @@ bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutRepor
 		OutReport.Add(EPipelineValidationSeverity::Warning, Code, Message);
 	};
 
-	if (Task == EPipelineTask::None || !(IsTextTask(Task) || IsImageTask(Task)))
+	if (Task == EPipelineTask::None || !(IsTextTask(Task) || IsImageTask(Task) || IsGenerativeTask(Task)))
 	{
 		AddError(EPipelineValidationCode::NoTask,
 			FString::Printf(TEXT("Task is %s; set the task the model serves"), LexToString(Task)));
 		return false;
 	}
 
-	if (Model == nullptr)
+	const bool bHasNne = Model != nullptr;
+	const bool bHasGguf = GgufModel != nullptr;
+	if (!bHasNne && !bHasGguf)
 	{
-		AddError(EPipelineValidationCode::NoModel, TEXT("Model is empty; assign the imported NNE model data"));
+		AddError(EPipelineValidationCode::NoModel, Task == EPipelineTask::TextGeneration
+			? FString(TEXT("GgufModel is empty; assign a GGUF model asset"))
+			: FString(TEXT("Model is empty; assign the imported NNE model data")));
+	}
+	else if (bHasNne && bHasGguf)
+	{
+		AddError(EPipelineValidationCode::BothModelsSet, TEXT("Model and GgufModel are both set; clear one of them"));
+	}
+	else if (bHasNne && Task == EPipelineTask::TextGeneration)
+	{
+		AddError(EPipelineValidationCode::WrongModelFormat, TEXT("TextGeneration needs a GGUF model"));
+	}
+	else if (bHasGguf && !IsGenerativeTask(Task))
+	{
+		AddError(EPipelineValidationCode::WrongModelFormat, FString::Printf(TEXT("%s needs an NNE model"), LexToString(Task)));
+	}
+
+	if (bHasGguf)
+	{
+		const IPipelineFileModel* File = Cast<IPipelineFileModel>(GgufModel.Get());
+		if (File == nullptr || File->GetFileFormat() != EPipelineModelFormat::GGUF)
+		{
+			AddError(EPipelineValidationCode::InvalidGgufModel,
+				FString::Printf(TEXT("GgufModel %s is not a GGUF model asset"), *GgufModel->GetName()));
+		}
+		else
+		{
+			TArray<FString> Problems;
+			if (File->GetAbsoluteFilePath().IsEmpty())
+			{
+				Problems.Add(TEXT("its RelativePath is invalid (must start with \"Models/\", end with \".gguf\", no \"..\")"));
+			}
+			const int64 Size = File->GetFileSizeBytes();
+			if (Size <= 0)
+			{
+				Problems.Add(FString::Printf(TEXT("SizeBytes is %lld; it must be > 0"), Size));
+			}
+			if (!IsSha256Hex(File->GetFileSha256()))
+			{
+				Problems.Add(TEXT("Sha256 is not 64 hex digits"));
+			}
+			if (Problems.Num() > 0)
+			{
+				AddError(EPipelineValidationCode::InvalidGgufModel,
+					FString::Printf(TEXT("GgufModel %s: %s"), *GgufModel->GetName(), *FString::Join(Problems, TEXT("; "))));
+			}
+		}
 	}
 
 	if (IsTextTask(Task))
@@ -235,6 +341,24 @@ bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutRepor
 	if (IsBlank(License.SpdxId))
 	{
 		AddWarning(EPipelineValidationCode::LicenseSpdxMissing, TEXT("License SPDX id is empty"));
+	}
+	else
+	{
+		const FString Spdx = License.SpdxId.TrimStartAndEnd();
+		bool bPermissive = false;
+		for (const TCHAR* Id : PermissiveSpdxIds)
+		{
+			if (Spdx.Equals(Id, ESearchCase::IgnoreCase))
+			{
+				bPermissive = true;
+				break;
+			}
+		}
+		if (!bPermissive)
+		{
+			AddWarning(EPipelineValidationCode::LicenseNotPermissive,
+				FString::Printf(TEXT("License %s is not Apache-2.0, MIT, BSD-2-Clause or BSD-3-Clause; check that its terms allow your use"), *Spdx));
+		}
 	}
 	if (IsBlank(License.SourceUrl))
 	{

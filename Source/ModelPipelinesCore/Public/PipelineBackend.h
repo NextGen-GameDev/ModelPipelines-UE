@@ -5,6 +5,8 @@
 #include "CoreMinimal.h"
 #include "PipelineTensor.h"
 #include "PipelineTypes.h"
+#include "PipelineModelSource.h"
+#include "PipelineSession.h"
 
 class UNNEModelData;
 
@@ -36,6 +38,16 @@ public:
 	    per model output, in model order, with the actual output shapes. Result.Device and Result.InferenceMs are set.
 	    On failure OutOutputs is empty. */
 	virtual FPipelineResult Run(TConstArrayView<FPipelineTensor> Inputs, TArray<FPipelineTensor>& OutOutputs) = 0;
+
+	/** Bytes this model holds outside the engine's RHI (e.g. Vulkan buffers, host copies). 0 = unknown/none. Any thread. */
+	virtual int64 GetExternalMemoryBytes() const { return 0; }
+
+	/** Any thread; non-blocking. Asks a running Initialize to stop early (it then returns Cancelled). Default: no-op. */
+	virtual void CancelInitialize() {}
+
+	/** Creates a session for a long-running job (C61). Default: nullptr + Fail(InvalidArgument, "Model has no sessions").
+	    Any thread. Creates no backend state yet (that happens in IPipelineSession::Begin on the worker). */
+	virtual TSharedPtr<IPipelineSession> CreateSession(const FPipelineSessionRequest& Request, FPipelineResult& OutResult);
 };
 
 /** Creates IPipelineModels from model data. */
@@ -54,4 +66,11 @@ public:
 	    Returns nullptr and sets OutResult (bSuccess false) on failure; on success OutResult = Ok().
 	    The returned model holds no UObject reference; ModelData may be garbage-collected afterwards. */
 	virtual TSharedPtr<IPipelineModel> PrepareModel(UNNEModelData* ModelData, EPipelineDevice Device, FPipelineResult& OutResult) = 0;
+
+	/** Formats this backend can prepare. Default: NNE only. */
+	virtual bool SupportsFormat(EPipelineModelFormat Format) const { return Format == EPipelineModelFormat::NNE; }
+
+	/** Game thread. Default: NNE -> PrepareModel(Source.NNEModel, ...); other formats -> nullptr + Fail(RuntimeUnavailable). */
+	virtual TSharedPtr<IPipelineModel> PrepareModelFromSource(const FPipelineModelSource& Source, EPipelineDevice Device,
+		FPipelineResult& OutResult);
 };

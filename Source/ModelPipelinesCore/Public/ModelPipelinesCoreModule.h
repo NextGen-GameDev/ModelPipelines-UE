@@ -27,6 +27,14 @@ public:
 	/** An FPipelineNNEBackend with the default config. Valid between StartupModule and ShutdownModule. */
 	IPipelineBackend& GetDefaultBackend();
 
+	/** Game thread. Registers a backend for its formats; a later registration wins. The NNE default backend is registered
+	    at startup. Unregister in the registering module's ShutdownModule. */
+	void RegisterBackend(TSharedRef<IPipelineBackend> Backend);
+	void UnregisterBackend(const TSharedRef<IPipelineBackend>& Backend);
+
+	/** Game thread. The backend for a format, or null. NNE -> the default backend. */
+	IPipelineBackend* FindBackend(EPipelineModelFormat Format) const;
+
 	/** Creates the executor and the default backend. */
 	virtual void StartupModule() override;
 
@@ -39,4 +47,6 @@ public:
 private:
 	TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> Executor;
 	TUniquePtr<FPipelineNNEBackend> DefaultBackend;
+	/** Backends added with RegisterBackend, newest first. */
+	TArray<TSharedRef<IPipelineBackend>> RegisteredBackends;
 };

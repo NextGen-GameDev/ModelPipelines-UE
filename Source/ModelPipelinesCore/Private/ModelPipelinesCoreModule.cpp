@@ -55,6 +55,38 @@ IPipelineBackend& FModelPipelinesCoreModule::GetDefaultBackend()
 	return *DefaultBackend;
 }
 
+void FModelPipelinesCoreModule::RegisterBackend(TSharedRef<IPipelineBackend> Backend)
+{
+	// Re-registering moves the backend to the front (newest).
+	RegisteredBackends.RemoveAll([&Backend](const TSharedRef<IPipelineBackend>& Entry) { return &Entry.Get() == &Backend.Get(); });
+	RegisteredBackends.Insert(MoveTemp(Backend), 0);
+}
+
+void FModelPipelinesCoreModule::UnregisterBackend(const TSharedRef<IPipelineBackend>& Backend)
+{
+	RegisteredBackends.RemoveAll([&Backend](const TSharedRef<IPipelineBackend>& Entry) { return &Entry.Get() == &Backend.Get(); });
+}
+
+IPipelineBackend* FModelPipelinesCoreModule::FindBackend(EPipelineModelFormat Format) const
+{
+	if (Format == EPipelineModelFormat::None)
+	{
+		return nullptr;
+	}
+	for (const TSharedRef<IPipelineBackend>& Entry : RegisteredBackends)
+	{
+		if (Entry->SupportsFormat(Format))
+		{
+			return &Entry.Get();
+		}
+	}
+	if (DefaultBackend.IsValid() && DefaultBackend->SupportsFormat(Format))
+	{
+		return DefaultBackend.Get();
+	}
+	return nullptr;
+}
+
 void FModelPipelinesCoreModule::StartupModule()
 {
 	GModelPipelinesCoreShuttingDown.store(false, std::memory_order_release);
@@ -85,6 +117,7 @@ void FModelPipelinesCoreModule::ShutdownModule()
 		Executor->Shutdown();
 	}
 	Executor.Reset();
+	RegisteredBackends.Reset();
 	DefaultBackend.Reset();
 }
 

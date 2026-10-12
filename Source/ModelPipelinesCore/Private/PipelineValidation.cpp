@@ -23,6 +23,10 @@ const TCHAR* LexToString(EPipelineValidationCode Code)
 	case EPipelineValidationCode::LicenseSourceMissing: return TEXT("LicenseSourceMissing");
 	case EPipelineValidationCode::LicenseAttributionMissing: return TEXT("LicenseAttributionMissing");
 	case EPipelineValidationCode::InvalidPostprocess: return TEXT("InvalidPostprocess");
+	case EPipelineValidationCode::BothModelsSet: return TEXT("BothModelsSet");
+	case EPipelineValidationCode::WrongModelFormat: return TEXT("WrongModelFormat");
+	case EPipelineValidationCode::InvalidGgufModel: return TEXT("InvalidGgufModel");
+	case EPipelineValidationCode::LicenseNotPermissive: return TEXT("LicenseNotPermissive");
 	case EPipelineValidationCode::MissingInput: return TEXT("MissingInput");
 	case EPipelineValidationCode::UnexpectedInput: return TEXT("UnexpectedInput");
 	case EPipelineValidationCode::InputTypeMismatch: return TEXT("InputTypeMismatch");
@@ -55,6 +59,10 @@ const TCHAR* LexToString(EPipelineValidationCode Code)
 	case EPipelineValidationCode::InvalidDestination: return TEXT("InvalidDestination");
 	case EPipelineValidationCode::AssetExists: return TEXT("AssetExists");
 	case EPipelineValidationCode::SaveFailed: return TEXT("SaveFailed");
+	case EPipelineValidationCode::GgufFileMissing: return TEXT("GgufFileMissing");
+	case EPipelineValidationCode::GgufSizeMismatch: return TEXT("GgufSizeMismatch");
+	case EPipelineValidationCode::GgufShaMismatch: return TEXT("GgufShaMismatch");
+	case EPipelineValidationCode::ModelsNotStagedNonUfs: return TEXT("ModelsNotStagedNonUfs");
 	default: return TEXT("Unknown");
 	}
 }

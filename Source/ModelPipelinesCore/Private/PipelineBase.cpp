@@ -378,7 +378,26 @@ FPipelineResult UPipelineBase::InitializeFromPackage(UPipelineModelPackage* InPa
 	{
 		return FPipelineResult::Fail(EPipelineError::RuntimeUnavailable, TEXT("ModelPipelinesCore module is not loaded"));
 	}
-	return InitializeFromPackage(InPackage, Module->GetDefaultBackend());
+	if (InPackage == nullptr)
+	{
+		// Same result as the explicit-backend overload; no backend is needed to report it.
+		return InitializeFromPackage(InPackage, Module->GetDefaultBackend());
+	}
+	const EPipelineModelFormat Format = InPackage->GetModelFormat();
+	IPipelineBackend* Backend = Module->FindBackend(Format);
+	if (Backend == nullptr)
+	{
+		if (Format == EPipelineModelFormat::None)
+		{
+			// Neither/both models set or an invalid GgufModel: the overload reports it through ValidateSettings.
+			return InitializeFromPackage(InPackage, Module->GetDefaultBackend());
+		}
+		UE_LOG(LogModelPipelines, Verbose, TEXT("InitializeFromPackage: no backend registered for format %d"), (int32)Format);
+		return FPipelineResult::Fail(EPipelineError::RuntimeUnavailable, FString::Printf(
+			TEXT("no backend is registered for the %s model format (is the plugin that runs it enabled?)"),
+			Format == EPipelineModelFormat::GGUF ? TEXT("GGUF") : TEXT("NNE")));
+	}
+	return InitializeFromPackage(InPackage, *Backend);
 }
 
 FPipelineResult UPipelineBase::InitializeFromPackage(UPipelineModelPackage* InPackage, IPipelineBackend& Backend)
@@ -416,7 +435,8 @@ FPipelineResult UPipelineBase::InitializeFromPackage(UPipelineModelPackage* InPa
 	}
 
 	FPipelineResult PrepareResult;
-	TSharedPtr<IPipelineModel> Model = Backend.PrepareModel(InPackage->Model, InPackage->PreferredDevice, PrepareResult);
+	const FPipelineModelSource Source = FPipelineModelSource::FromPackage(InPackage);
+	TSharedPtr<IPipelineModel> Model = Backend.PrepareModelFromSource(Source, InPackage->PreferredDevice, PrepareResult);
 	if (!Model.IsValid())
 	{
 		if (PrepareResult.bSuccess || PrepareResult.Error == EPipelineError::None)

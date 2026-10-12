@@ -6,6 +6,7 @@
 #include "Templates/Function.h"
 #include "Templates/UniquePtr.h"
 #include "PipelineBackend.h"
+#include "PipelineSession.h"
 #include "PipelineTensor.h"
 #include "PipelineTypes.h"
 
@@ -123,8 +124,26 @@ public:
 	FPipelineResult RunBlocking(TSharedPtr<IPipelineModel> Model, TConstArrayView<FPipelineTensor> Inputs, TArray<FPipelineTensor>& OutOutputs);
 
 	/**
+	 * Any thread. Queues a session (C61); returns its id (> 0), or 0 after Shutdown (callbacks never called). A null
+	 * session is accepted and completes with InvalidArgument. Owner/Priority as for Enqueue.
+	 * The worker loads the model on a background task if needed, then runs Begin, one Step per turn (the session goes
+	 * back to the end of the queue after each Step) and End. From Begin to End no other job runs on the session's model.
+	 */
+	FPipelineJobId EnqueueSession(TSharedPtr<IPipelineSession> Session, FPipelineSessionCallbacks Callbacks,
+		const UObject* Owner = nullptr, int32 Priority = 0);
+
+	/**
+	 * Tests and tools; any thread except the worker (returns Fail(Internal) there at once). Runs the session to the end
+	 * through the same queue; OutProgress gets every item in order. Same release rules as RunBlocking.
+	 */
+	FPipelineResult RunSessionBlocking(TSharedPtr<IPipelineSession> Session, TArray<FPipelineSessionProgress>& OutProgress);
+
+	/**
 	 * Any thread. Returns true if the job was still queued; it is removed and its callback then fires (game thread,
-	 * never inside Cancel) with Cancelled. A running or finished job, id 0 or an unknown id returns false.
+	 * never inside Cancel) with Cancelled. A running one-shot job, a finished job, id 0 or an unknown id returns false.
+	 * A running (or loading) session returns true: the worker finishes at most the Step in flight, calls
+	 * End(Cancelled), then OnComplete(Cancelled) follows; progress not yet delivered is dropped. A second Cancel of
+	 * the same session returns false.
 	 */
 	bool Cancel(FPipelineJobId Id);
 

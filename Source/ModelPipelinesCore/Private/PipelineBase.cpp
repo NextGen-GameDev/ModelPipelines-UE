@@ -498,6 +498,12 @@ EPipelineDevice UPipelineBase::GetDevice() const
 	return EPipelineDevice::Auto;
 }
 
+TSharedPtr<IPipelineModel> UPipelineBase::GetModel() const
+{
+	const TSharedPtr<FPipelineRuntime, ESPMode::ThreadSafe> Rt = Runtime;
+	return Rt.IsValid() ? Rt->Model : nullptr;
+}
+
 int32 UPipelineBase::GetNumPendingCalls() const
 {
 	return PendingCalls.IsValid() ? PendingCalls->GetValue() : 0;

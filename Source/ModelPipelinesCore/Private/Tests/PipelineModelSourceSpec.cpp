@@ -65,6 +65,34 @@ namespace PipelineModelSourceSpecPrivate
 		}
 	};
 
+	/** Minimal model returned by FFakeGgufModelBackend (GetModel tests; lead 2026-10-13). */
+	class FFakeGgufModel : public IPipelineModel
+	{
+	public:
+		virtual FPipelineResult Initialize() override { return FPipelineResult::Ok(); }
+		virtual bool IsInitialized() const override { return false; }
+		virtual EPipelineDevice GetDevice() const override { return EPipelineDevice::CPU; }
+		virtual TArray<FPipelineTensorDesc> GetInputDescs() const override { return {}; }
+		virtual TArray<FPipelineTensorDesc> GetOutputDescs() const override { return {}; }
+		virtual FPipelineResult Run(TConstArrayView<FPipelineTensor>, TArray<FPipelineTensor>&) override
+		{
+			return FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("fake"));
+		}
+	};
+
+	class FFakeGgufModelBackend : public FFakeGgufBackend
+	{
+	public:
+		TSharedPtr<IPipelineModel> Returned = MakeShared<FFakeGgufModel>();
+		virtual TSharedPtr<IPipelineModel> PrepareModelFromSource(const FPipelineModelSource& Source, EPipelineDevice, FPipelineResult& Out) override
+		{
+			++PrepareCalls;
+			LastSource = Source;
+			Out = FPipelineResult::Ok();
+			return Returned;
+		}
+	};
+
 	static int32 CountCode(const FPipelineValidationReport& R, EPipelineValidationCode Code)
 	{
 		int32 N = 0;
@@ -435,6 +463,34 @@ void FPipelineModelSourceSpec::Define()
 			const FPipelineValidationReport R = Validate(P, bOk);
 			TestTrue(FString::Printf(TEXT("valid; report:\n%s"), *R.ToString()), bOk);
 			TestEqual(TEXT("one code 18"), CountCode(R, LicenseNotPermissive), 1);
+		});
+	});
+
+	Describe("GetModel and the GgufModel picker (Noah 2026-10-13)", [this]()
+	{
+		It("GetModel is null before InitializeFromPackage and returns the prepared model after it", [this]()
+		{
+			FFakeGgufModelBackend Fake;
+			UPipelineTestGenerationPipeline* Pipe = Track(NewObject<UPipelineTestGenerationPipeline>(GetTransientPackage()));
+			TestFalse(TEXT("null before initialization"), Pipe->GetModelForTests().IsValid());
+			UPipelineModelPackage* P = MakePackage(EPipelineTask::TextGeneration, false, MakeFile());
+			const FPipelineResult R = Pipe->InitializeFromPackage(P, Fake);
+			if (!TestTrue(FString::Printf(TEXT("initialized (%s)"), *R.Message), R.bSuccess)) { return; }
+			TestTrue(TEXT("GetModel returns exactly the backend's model"), Pipe->GetModelForTests() == Fake.Returned);
+			TestEqual(TEXT("prepared once"), Fake.PrepareCalls, 1);
+		});
+
+		It("GgufModel carries MustImplement = the PipelineFileModel interface", [this]()
+		{
+#if WITH_METADATA
+			const FProperty* Prop = UPipelineModelPackage::StaticClass()->FindPropertyByName(TEXT("GgufModel"));
+			if (!TestNotNull(TEXT("GgufModel property"), Prop)) { return; }
+			TestEqual(TEXT("MustImplement"), Prop->GetMetaData(TEXT("MustImplement")), FString(TEXT("/Script/ModelPipelinesCore.PipelineFileModel")));
+			const UClass* Iface = FindObject<UClass>(nullptr, TEXT("/Script/ModelPipelinesCore.PipelineFileModel"));
+			TestTrue(TEXT("the path names the interface class"), Iface == UPipelineFileModel::StaticClass());
+#else
+			AddInfo(TEXT("SKIPPED: no metadata in this build"));
+#endif
 		});
 	});
 

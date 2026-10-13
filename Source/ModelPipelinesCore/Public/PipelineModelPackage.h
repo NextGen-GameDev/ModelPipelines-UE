@@ -237,7 +237,7 @@ public:
 
 	/** GGUF models (TextGeneration). Exactly one of Model / GgufModel is set. Typed as UDataAsset so Core needs no
 	    dependency on ModelPipelinesLlama; it must be a UPipelineGgufModel (an IPipelineFileModel). */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pipeline")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pipeline", meta = (MustImplement = "/Script/ModelPipelinesCore.PipelineFileModel"))
 	TObjectPtr<UDataAsset> GgufModel;
 
 	/** Full tokenizer.json text; not shown in the details panel (megabytes). */

@@ -8,6 +8,7 @@
 #include "Engine/DataAsset.h"
 #include "PipelineModelSource.h"
 #include "PipelineBase.h"
+#include "PipelineBackend.h"
 #include "PipelineTestFileModel.generated.h"
 
 /** Test-only pointer asset implementing IPipelineFileModel (stands in for UPipelineGgufModel, which lives in another plugin). */
@@ -42,4 +43,6 @@ class UPipelineTestGenerationPipeline : public UPipelineBase
 	GENERATED_BODY()
 public:
 	UPipelineTestGenerationPipeline() { PipelineTask = EPipelineTask::TextGeneration; }
+	/** Exposes the protected accessor (Noah 2026-10-13) to the tests. */
+	TSharedPtr<IPipelineModel> GetModelForTests() const { return GetModel(); }
 };

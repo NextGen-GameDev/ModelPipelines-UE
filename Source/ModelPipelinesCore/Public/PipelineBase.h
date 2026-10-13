@@ -17,6 +17,7 @@
 #include "PipelineBase.generated.h"
 
 class IPipelineBackend;
+class IPipelineModel;
 
 /** What the stage functions see. Filled once, on the first call, from the initialized model; immutable afterwards. */
 struct MODELPIPELINESCORE_API FPipelineModelInfo
@@ -103,6 +104,10 @@ protected:
 	const FPipelinePreprocessSettings& GetPreprocessSettings() const;
 	const FPipelinePostprocessSettings& GetPostprocessSettings() const;
 	const TArray<FString>& GetLabels() const;
+
+	/** The model prepared by InitializeFromPackage (visible from OnInitialize on); null before and after a failed
+	    initialization. Subclasses that run sessions (C61) create them on it. Any thread. (Noah 2026-10-13.) */
+	TSharedPtr<IPipelineModel> GetModel() const;
 
 private:
 	UPROPERTY()

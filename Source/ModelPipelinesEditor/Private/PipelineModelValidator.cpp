@@ -465,6 +465,12 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 		UE_LOG(LogModelPipelinesEditor, Verbose, TEXT("Validated %s: %d errors, %d warnings."), *Package->GetPathName(), Report.NumErrors(), Report.NumWarnings());
 		return Report;
 	}
+	if (Report.HasError(ECode::WrongModelFormat))
+	{
+		// E.g. a TextGeneration package with an NNE Model: the NNE steps (devices, smoke run) don't apply to it.
+		UE_LOG(LogModelPipelinesEditor, Verbose, TEXT("Validated %s: %d errors, %d warnings."), *Package->GetPathName(), Report.NumErrors(), Report.NumWarnings());
+		return Report;
+	}
 	if (Report.HasError(ECode::NoTask) || Report.HasError(ECode::NoModel) || Package->Model == nullptr)
 	{
 		if (!Report.HasCode(ECode::NoTask) && !Report.HasCode(ECode::NoModel))

@@ -14,6 +14,7 @@
 #include "Settings/ProjectPackagingSettings.h"
 #include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
+#include "NNEModelData.h"
 #include "PipelineModelPackage.h"
 #include "PipelineModelSource.h"
 #include "PipelineValidation.h"
@@ -250,7 +251,9 @@ void FPipelineGgufValidatorSpec::Define()
 			const FPipelineValidationReport R = Validate(C);
 			TestTrue(*FString::Printf(TEXT("69 Error expected; %s"), *R.ToString()), HasCode(R, ECode::GgufSizeMismatch, ESev::Error));
 			const FString Msg = MessageOf(R, ECode::GgufSizeMismatch);
-			TestTrue(*FString::Printf(TEXT("69 message has the file size 3 and the declared size 4; got '%s'"), *Msg), Msg.Contains(TEXT("3")) && Msg.Contains(TEXT("4")));
+			// Exact wording of the validator: "... is %lld bytes, the asset expects %lld bytes ..." (3 on disk, 4 declared).
+			TestTrue(*FString::Printf(TEXT("69 message says 'is 3 bytes' (file size); got '%s'"), *Msg), Msg.Contains(TEXT("is 3 bytes")));
+			TestTrue(*FString::Printf(TEXT("69 message says 'expects 4 bytes' (declared size); got '%s'"), *Msg), Msg.Contains(TEXT("expects 4 bytes")));
 			TestFalse(*FString::Printf(TEXT("no 70 when the size already differs; %s"), *R.ToString()), R.HasCode(ECode::GgufShaMismatch));
 		});
 
@@ -330,6 +333,27 @@ void FPipelineGgufValidatorSpec::Define()
 			bool bWording = false;
 			for (const FPipelineValidationMessage& M : R.Messages) { bWording |= M.Message.Contains(TEXT("Re-import the ONNX model.")); }
 			TestTrue(*FString::Printf(TEXT("a message says 'Re-import the ONNX model.'; %s"), *R.ToString()), bWording);
+		});
+
+		// Catches a validator that, for a TextGeneration package holding an NNE Model and no GgufModel, reports 16 but keeps going
+		// into the NNE steps (device checks, tokenizer / runtime / smoke-run codes) instead of returning early.
+		It("TextGeneration with an NNE Model and no GgufModel -> WrongModelFormat (16) and an early return (no device checks, no NNE codes)", [this]()
+		{
+			TStrongObjectPtr<UNNEModelData> Nne(NewObject<UNNEModelData>(GetTransientPackage()));
+			TStrongObjectPtr<UPipelineModelPackage> P(NewObject<UPipelineModelPackage>(GetTransientPackage()));
+			P->Task = EPipelineTask::TextGeneration;
+			P->Model = Nne.Get();
+			P->License.SpdxId = TEXT("Apache-2.0");
+			P->License.SourceUrl = TEXT("https://example.com/model");
+			P->License.Attribution = TEXT("Test");
+			const FPipelineValidationReport R = ValidatePipelineModelPackage(P.Get());   // default options: smoke test and GPU on
+			TestTrue(*FString::Printf(TEXT("16 Error expected; %s"), *R.ToString()), HasCode(R, ECode::WrongModelFormat, ESev::Error));
+			TestEqual(*FString::Printf(TEXT("DeviceChecks empty (NNE steps not run); %s"), *R.ToString()), R.DeviceChecks.Num(), 0);
+			for (const FPipelineValidationMessage& M : R.Messages)
+			{
+				TestFalse(*FString::Printf(TEXT("NNE-only code %s after 16; %s"), LexToString(M.Code), *R.ToString()), IsNneCode(M.Code));
+			}
+			TestFalse(TEXT("report is invalid"), R.IsValid());
 		});
 
 		It("GgufModel that is not an IPipelineFileModel -> InvalidGgufModel (17), no crash, no NNE-only codes", [this]()

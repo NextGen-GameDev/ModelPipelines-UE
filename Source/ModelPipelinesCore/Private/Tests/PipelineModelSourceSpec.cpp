@@ -447,10 +447,11 @@ void FPipelineModelSourceSpec::Define()
 			TestTrue(TEXT("None -> null"), M.FindBackend(EPipelineModelFormat::None) == nullptr);
 		});
 
-		It("GGUF: null, then the registered backend, then null again; a second registration wins", [this]()
+		It("GGUF: the registered backend, then the previous one again; a second registration wins", [this]()
 		{
 			FModelPipelinesCoreModule& M = FModelPipelinesCoreModule::Get();
-			TestTrue(TEXT("GGUF null before"), M.FindBackend(EPipelineModelFormat::GGUF) == nullptr);
+			// Null with Core alone; the Llama backend when ModelPipelinesGenerative is enabled (lead, 2026-10-12).
+			IPipelineBackend* const Before = M.FindBackend(EPipelineModelFormat::GGUF);
 			TSharedRef<FFakeGgufBackend> A = MakeShared<FFakeGgufBackend>();
 			TSharedRef<FFakeGgufBackend> B = MakeShared<FFakeGgufBackend>();
 			Reg(A);
@@ -461,7 +462,8 @@ void FPipelineModelSourceSpec::Define()
 			M.UnregisterBackend(B);
 			M.UnregisterBackend(A);
 			Registered.Reset();
-			TestTrue(TEXT("GGUF null after unregistering both"), M.FindBackend(EPipelineModelFormat::GGUF) == nullptr);
+			TestTrue(TEXT("GGUF back to the backend found before (null with Core alone) after unregistering both"),
+				M.FindBackend(EPipelineModelFormat::GGUF) == Before);
 			TestTrue(TEXT("NNE still the default"), M.FindBackend(EPipelineModelFormat::NNE) == &M.GetDefaultBackend());
 		});
 	});
@@ -470,6 +472,13 @@ void FPipelineModelSourceSpec::Define()
 	{
 		It("GGUF package with no GGUF backend -> RuntimeUnavailable, no crash", [this]()
 		{
+			if (IPipelineBackend* External = FModelPipelinesCoreModule::Get().FindBackend(EPipelineModelFormat::GGUF))
+			{
+				// Another plugin (ModelPipelinesGenerative) registered a GGUF backend at startup and Core can't remove it
+				// here. This case runs where only the free plugin is installed (fresh-project acceptance). (Lead, 2026-10-12.)
+				AddInfo(FString::Printf(TEXT("SKIPPED: a GGUF backend (%s) is registered by another plugin."), *External->GetName().ToString()));
+				return;
+			}
 			UPipelineModelPackage* P = MakePackage(EPipelineTask::TextGeneration, false, MakeFile());
 			UPipelineTestGenerationPipeline* Pipe = Track(NewObject<UPipelineTestGenerationPipeline>(GetTransientPackage()));
 			const FPipelineResult R = Pipe->InitializeFromPackage(P);

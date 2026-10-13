@@ -11,6 +11,6 @@ public class ModelPipelinesEditor : ModuleRules
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "ModelPipelinesCore" });
 		PrivateDependencyModuleNames.AddRange(new string[] {
 			"UnrealEd", "NNE", "ModelPipelinesTokenizer", "Json", "AssetRegistry", "AssetTools", "ToolMenus",
-			"ContentBrowser", "DesktopPlatform", "Slate", "SlateCore", "Projects" });
+			"ContentBrowser", "DesktopPlatform", "Slate", "SlateCore", "Projects", "DeveloperToolSettings" });
 	}
 }

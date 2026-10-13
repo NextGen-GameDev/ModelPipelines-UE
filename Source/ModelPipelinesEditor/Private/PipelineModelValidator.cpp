@@ -3,14 +3,20 @@
 #include "PipelineModelValidator.h"
 
 #include "Containers/ArrayView.h"
+#include "Engine/EngineTypes.h"
+#include "HAL/FileManager.h"
 #include "Math/UnrealMathUtility.h"
+#include "Misc/Paths.h"
+#include "Settings/ProjectPackagingSettings.h"
 #include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 #include "ModelPipelinesCoreModule.h"
 #include "PipelineBackend.h"
 #include "PipelineExecutor.h"
+#include "PipelineFileHash.h"
 #include "PipelineModelPackage.h"
+#include "PipelineModelSource.h"
 #include "PipelineTaskIO.h"
 #include "PipelineTensor.h"
 #include "PipelineEditorLog.h"
@@ -327,6 +333,99 @@ namespace PipelineModelValidatorPrivate
 		Check.bAvailable = bAvailable;
 		return Check;
 	}
+
+	/** True when DirectoriesToAlwaysStageAsNonUFS has the Models directory ("Models" or "/Game/Models", any case). */
+	static bool IsModelsStagedNonUfs()
+	{
+		const UProjectPackagingSettings* const Settings = GetDefault<UProjectPackagingSettings>();
+		if (Settings == nullptr)
+		{
+			return false;
+		}
+		for (const FDirectoryPath& Dir : Settings->DirectoriesToAlwaysStageAsNonUFS)
+		{
+			FString Path = Dir.Path.TrimStartAndEnd();
+			while (Path.EndsWith(TEXT("/")) || Path.EndsWith(TEXT("\\")))
+			{
+				Path.LeftChopInline(1);
+			}
+			if (Path.Equals(TEXT("Models"), ESearchCase::IgnoreCase) || Path.Equals(TEXT("/Game/Models"), ESearchCase::IgnoreCase))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** GGUF branch (C60c): loose file exists, size and SHA-256 match, and Content/Models is staged NonUFS. Never modifies anything. */
+	static void ValidateGgufFile(const UPipelineModelPackage& Package, FPipelineValidationReport& Report)
+	{
+		if (Package.GetModelFormat() != EPipelineModelFormat::GGUF)
+		{
+			// Not an IPipelineFileModel, or both models set: ValidateSettings has reported it.
+			return;
+		}
+
+		if (!IsModelsStagedNonUfs())
+		{
+			Report.Add(ESev::Warning, ECode::ModelsNotStagedNonUfs, TEXT(
+				"The project does not stage Content/Models as NonUFS, so a packaged game can't open the .gguf file. Add "
+				"+DirectoriesToAlwaysStageAsNonUFS=(Path=\"Models\") to [/Script/UnrealEd.ProjectPackagingSettings] in Config/DefaultGame.ini "
+				"(Project Settings > Packaging > Additional Non-Asset Directories To Copy)."));
+		}
+
+		const IPipelineFileModel* const FileModel = Cast<IPipelineFileModel>(Package.GgufModel.Get());
+		if (FileModel == nullptr)
+		{
+			return;
+		}
+		const FString Path = FileModel->GetAbsoluteFilePath();
+		if (Path.IsEmpty())
+		{
+			// InvalidGgufModel was already reported by ValidateSettings.
+			return;
+		}
+
+		IFileManager& FileManager = IFileManager::Get();
+		if (FileManager.DirectoryExists(*Path))
+		{
+			Report.Add(ESev::Error, ECode::GgufFileMissing, FString::Printf(
+				TEXT("The GGUF model path %s is a directory, not a file. Point the GGUF model asset at the .gguf file or re-import it."), *Path));
+			return;
+		}
+		const int64 ActualSize = FileManager.FileSize(*Path);
+		if (ActualSize < 0)
+		{
+			Report.Add(ESev::Error, ECode::GgufFileMissing, FString::Printf(
+				TEXT("The GGUF model file %s does not exist. Copy the .gguf file there or re-import the model."), *Path));
+			return;
+		}
+		const int64 ExpectedSize = FileModel->GetFileSizeBytes();
+		if (ActualSize != ExpectedSize)
+		{
+			Report.Add(ESev::Error, ECode::GgufSizeMismatch, FString::Printf(
+				TEXT("The GGUF model file %s is %lld bytes, the asset expects %lld bytes. The file was replaced or is incomplete; re-import the model."),
+				*Path, ActualSize, ExpectedSize));
+			return;
+		}
+
+		UE_LOG(LogModelPipelinesEditor, Display, TEXT("Hashing %s (%.1f MB)..."), *FPaths::GetCleanFilename(Path), ActualSize / (1024.0 * 1024.0));
+		FString ActualSha;
+		FString HashError;
+		if (!ComputeFileSha256(Path, ActualSha, HashError))
+		{
+			Report.Add(ESev::Error, ECode::GgufFileMissing, FString::Printf(
+				TEXT("Can't read the GGUF model file %s: %s. Close programs that lock it, check its permissions, or re-import the model."), *Path, *HashError));
+			return;
+		}
+		const FString ExpectedSha = FileModel->GetFileSha256().TrimStartAndEnd().ToLower();
+		if (!ActualSha.Equals(ExpectedSha, ESearchCase::IgnoreCase))
+		{
+			Report.Add(ESev::Error, ECode::GgufShaMismatch, FString::Printf(
+				TEXT("The GGUF model file %s has SHA-256 %s, the asset expects %s. The file was replaced or is corrupt; re-import the model."),
+				*Path, *ActualSha, *ExpectedSha));
+		}
+	}
 }
 
 FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPackage* Package, const FPipelineValidateOptions& Options)
@@ -359,11 +458,29 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 		return Report;
 	}
 	Package->ValidateSettings(Report);
+	if (Package->GgufModel != nullptr || Package->GetModelFormat() == EPipelineModelFormat::GGUF)
+	{
+		// GGUF (or a GgufModel that ValidateSettings already rejected): the NNE steps never apply.
+		ValidateGgufFile(*Package, Report);
+		UE_LOG(LogModelPipelinesEditor, Verbose, TEXT("Validated %s: %d errors, %d warnings."), *Package->GetPathName(), Report.NumErrors(), Report.NumWarnings());
+		return Report;
+	}
 	if (Report.HasError(ECode::NoTask) || Report.HasError(ECode::NoModel) || Package->Model == nullptr)
 	{
 		if (!Report.HasCode(ECode::NoTask) && !Report.HasCode(ECode::NoModel))
 		{
 			Report.Add(ESev::Error, ECode::NoModel, TEXT("The package has no model. Re-import the ONNX model."));
+		}
+		else if (Package->Task != EPipelineTask::TextGeneration)
+		{
+			// NNE task: keep the editor's fix hint on the settings check's NoModel entry (one entry, not two).
+			for (FPipelineValidationMessage& Message : Report.Messages)
+			{
+				if (Message.Code == ECode::NoModel && !Message.Message.Contains(TEXT("Re-import the ONNX model.")))
+				{
+					Message.Message += Message.Message.EndsWith(TEXT(".")) ? TEXT(" Re-import the ONNX model.") : TEXT(". Re-import the ONNX model.");
+				}
+			}
 		}
 		return Report;
 	}

@@ -133,7 +133,7 @@ namespace PipelineMcpRunPrivate
 		case EPipelineTask::ImageClassification: return UVisionPipelineLibrary::CreateImageClassificationPipeline(Package, OutResult);
 		case EPipelineTask::ObjectDetection:     return UVisionPipelineLibrary::CreateObjectDetectionPipeline(Package, OutResult);
 		default:
-			OutResult = FPipelineResult::Fail(EPipelineError::WrongTask, TEXT("Model package task is None; set Task on the package"));
+			OutResult = FPipelineResult::Fail(EPipelineError::WrongTask, FString::Printf(TEXT("task %s has no runnable pipeline in this plugin"), LexToString(Task)));
 			return nullptr;
 		}
 	}
@@ -365,7 +365,7 @@ namespace PipelineMcpRunPrivate
 			}
 			else
 			{
-				FailJob(TEXT("Model package task is None; set Task on the package"));
+				FailJob(FString::Printf(TEXT("task %s has no runnable pipeline in this plugin"), LexToString(Task)));
 				return;
 			}
 
@@ -549,7 +549,7 @@ namespace PipelineMcpRunPrivate
 				}
 				break;
 			default:
-				Entry->SetStringField(TEXT("error"), TEXT("Model package task is None; set Task on the package"));
+				Entry->SetStringField(TEXT("error"), FString::Printf(TEXT("task %s has no runnable pipeline in this plugin"), LexToString(Task)));
 				EndDevice(true);
 				break;
 			}
@@ -701,7 +701,7 @@ namespace PipelineMcpRunPrivate
 			}
 			else
 			{
-				FailJob(TEXT("Model package task is None; set Task on the package"));
+				FailJob(FString::Printf(TEXT("task %s has no runnable pipeline in this plugin"), LexToString(Task)));
 				return;
 			}
 
@@ -765,7 +765,7 @@ namespace PipelineMcpRunPrivate
 					[Self](const FPipelineResult& R, const TArray<FPipelineDetection>& D) { Self->OnDetections(R, D); });
 				break;
 			default:
-				FailJob(TEXT("Model package task is None; set Task on the package"));
+				FailJob(FString::Printf(TEXT("task %s has no runnable pipeline in this plugin"), LexToString(Task)));
 				break;
 			}
 		}

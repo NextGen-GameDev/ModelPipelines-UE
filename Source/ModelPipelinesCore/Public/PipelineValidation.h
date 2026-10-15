@@ -58,6 +58,8 @@ enum class EPipelineValidationCode : uint8
 	InvalidGgufModel = 17,
 	/** Warning: License.SpdxId is not Apache-2.0, MIT, BSD-2-Clause or BSD-3-Clause (case-insensitive). */
 	LicenseNotPermissive = 18,
+	/** Error: a SpeechToText package with an NNE Model has no DecoderModel. */
+	NoDecoderModel = 19,
 	// task I/O (ResolvePipelineTaskIO, WP2.3)
 	/** Error: an expected model input is absent. */
 	MissingInput = 20,
@@ -134,6 +136,11 @@ enum class EPipelineValidationCode : uint8
 	GgufShaMismatch = 70,
 	/** Warning: the project does not stage Content/Models as NonUFS. */
 	ModelsNotStagedNonUfs = 71,
+	// speech packages (C72a)
+	/** Warning: DecoderModel is set on a package whose task uses one model. */
+	UnexpectedDecoderModel = 72,
+	/** Error: FPipelineSpeechSettings has invalid values (the message lists every problem). */
+	InvalidSpeechSettings = 73,
 };
 
 /** Enumerator name of a validation code, e.g. "MissingInput"; "Unknown" for a value outside the enum. */

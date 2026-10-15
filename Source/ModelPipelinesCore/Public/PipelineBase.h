@@ -109,6 +109,13 @@ protected:
 	    initialization. Subclasses that run sessions (C61) create them on it. Any thread. (Noah 2026-10-13.) */
 	TSharedPtr<IPipelineModel> GetModel() const;
 
+	/** Two-graph tasks (SpeechToText): the package's DecoderModel, prepared on CPU by InitializeFromPackage (not yet
+	    initialized; the task pipeline initializes it off the game thread). Null when the package has none. Any thread. */
+	TSharedPtr<IPipelineModel> GetDecoderModel() const;
+
+	/** Copy of the package's Speech settings taken at InitializeFromPackage. Any thread. */
+	const FPipelineSpeechSettings& GetSpeechSettings() const;
+
 private:
 	UPROPERTY()
 	TObjectPtr<UPipelineModelPackage> Package;

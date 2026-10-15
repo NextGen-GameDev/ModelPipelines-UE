@@ -228,6 +228,85 @@ bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutRepor
 		}
 	}
 
+	if (Task == EPipelineTask::SpeechToText)
+	{
+		if (bHasNne && DecoderModel == nullptr)
+		{
+			AddError(EPipelineValidationCode::NoDecoderModel,
+				TEXT("DecoderModel is empty; a SpeechToText package needs the decoder_joint model"));
+		}
+		if (TokenizerJson.IsEmpty())
+		{
+			AddError(EPipelineValidationCode::NoTokenizer,
+				FString::Printf(TEXT("TokenizerJson is empty; a %s package needs the tokenizer.json text"), LexToString(Task)));
+		}
+
+		TArray<FString> Problems;
+		auto CheckPositive = [&Problems](const TCHAR* Name, int32 Value)
+		{
+			if (Value <= 0)
+			{
+				Problems.Add(FString::Printf(TEXT("%s is %d; it must be > 0"), Name, Value));
+			}
+		};
+		CheckPositive(TEXT("SampleRate"), Speech.SampleRate);
+		CheckPositive(TEXT("NumMelBins"), Speech.NumMelBins);
+		CheckPositive(TEXT("FftSize"), Speech.FftSize);
+		CheckPositive(TEXT("WindowLength"), Speech.WindowLength);
+		CheckPositive(TEXT("HopLength"), Speech.HopLength);
+		CheckPositive(TEXT("SubsamplingFactor"), Speech.SubsamplingFactor);
+		CheckPositive(TEXT("MaxSymbolsPerStep"), Speech.MaxSymbolsPerStep);
+		if (Speech.WindowLength > Speech.FftSize)
+		{
+			Problems.Add(FString::Printf(TEXT("WindowLength is %d; it must be at most FftSize (%d)"), Speech.WindowLength, Speech.FftSize));
+		}
+		if (!FMath::IsFinite(Speech.Preemphasis) || !(Speech.Preemphasis >= 0.f && Speech.Preemphasis < 1.f))
+		{
+			Problems.Add(FString::Printf(TEXT("Preemphasis is %g; it must be in [0, 1)"), (double)Speech.Preemphasis));
+		}
+		if (Speech.BlankTokenId < 0)
+		{
+			Problems.Add(FString::Printf(TEXT("BlankTokenId is %d; it must be >= 0"), Speech.BlankTokenId));
+		}
+		if (Speech.Durations.IsEmpty())
+		{
+			Problems.Add(TEXT("Durations is empty; it needs at least one value >= 1"));
+		}
+		else
+		{
+			bool bAnyNegative = false;
+			bool bAnyAdvance = false;
+			for (const int32 Duration : Speech.Durations)
+			{
+				bAnyNegative |= Duration < 0;
+				bAnyAdvance |= Duration >= 1;
+			}
+			if (bAnyNegative)
+			{
+				Problems.Add(TEXT("Durations has a negative value; every value must be >= 0"));
+			}
+			if (!bAnyAdvance)
+			{
+				Problems.Add(TEXT("Durations has no value >= 1; decoding could never advance"));
+			}
+		}
+		if (!FMath::IsFinite(Speech.SilenceThresholdDb) || Speech.SilenceThresholdDb > 0.f)
+		{
+			Problems.Add(FString::Printf(TEXT("SilenceThresholdDb is %g; it must be finite and <= 0 (-100 disables the gate)"),
+				(double)Speech.SilenceThresholdDb));
+		}
+		if (Problems.Num() > 0)
+		{
+			AddError(EPipelineValidationCode::InvalidSpeechSettings,
+				FString::Printf(TEXT("Speech settings are invalid: %s"), *FString::Join(Problems, TEXT("; "))));
+		}
+	}
+	else if (DecoderModel != nullptr)
+	{
+		AddWarning(EPipelineValidationCode::UnexpectedDecoderModel,
+			FString::Printf(TEXT("DecoderModel is set but %s uses one model"), LexToString(Task)));
+	}
+
 	if (IsTextTask(Task))
 	{
 		if (TokenizerJson.IsEmpty())

@@ -201,6 +201,57 @@ struct MODELPIPELINESCORE_API FPipelineGenerationModelSettings
 	int32 MaxCachedConversations = 4;
 };
 
+/** Audio front-end and decoding settings of a SpeechToText package. docs/contracts.md C72a. */
+USTRUCT(BlueprintType)
+struct MODELPIPELINESCORE_API FPipelineSpeechSettings
+{
+	GENERATED_BODY()
+
+	/** Sample rate (Hz) the model expects; input audio is resampled to it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	int32 SampleRate = 16000;
+
+	/** Number of mel filterbank bins (the encoder's feature dimension). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	int32 NumMelBins = 128;
+
+	/** FFT size in samples. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	int32 FftSize = 512;
+
+	/** Analysis window length in samples (at most FftSize). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	int32 WindowLength = 400;
+
+	/** Hop between frames in samples. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	int32 HopLength = 160;
+
+	/** Pre-emphasis coefficient in [0, 1); 0 disables pre-emphasis. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	float Preemphasis = 0.97f;
+
+	/** Encoder time subsampling factor (feature frames per encoder frame). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	int32 SubsamplingFactor = 8;
+
+	/** Token id of the blank symbol; the decoder's token logits have BlankTokenId + 1 entries. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	int32 BlankTokenId = 8192;
+
+	/** Frame advances the duration head can predict (TDT); index = duration logit. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	TArray<int32> Durations = { 0, 1, 2, 3, 4 };
+
+	/** Most symbols emitted per encoder frame before the decoder is forced to advance. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	int32 MaxSymbolsPerStep = 10;
+
+	/** Clips whose RMS is below this (dBFS) return an empty transcript without inference. -100 disables the gate. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	float SilenceThresholdDb = -60.f;
+};
+
 /** License record of the packaged model. */
 USTRUCT(BlueprintType)
 struct MODELPIPELINESCORE_API FPipelineModelLicense
@@ -235,6 +286,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pipeline")
 	TObjectPtr<UNNEModelData> Model;
 
+	/** Second ONNX graph for two-graph tasks. SpeechToText: Model = encoder.onnx, DecoderModel = decoder_joint.onnx.
+	    Must be null for every other task. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pipeline")
+	TObjectPtr<UNNEModelData> DecoderModel;
+
 	/** GGUF models (TextGeneration). Exactly one of Model / GgufModel is set. Typed as UDataAsset so Core needs no
 	    dependency on ModelPipelinesLlama; it must be a UPipelineGgufModel (an IPipelineFileModel). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Pipeline", meta = (MustImplement = "/Script/ModelPipelinesCore.PipelineFileModel"))
@@ -268,11 +324,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation")
 	FPipelineGenerationModelSettings Generation;
 
+	/** Audio and decoding settings of a SpeechToText package. Unused by other tasks. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Speech")
+	FPipelineSpeechSettings Speech;
+
 	/** Game thread. NNE if Model set, GGUF if GgufModel set (and it is an IPipelineFileModel), None if neither or both. */
 	EPipelineModelFormat GetModelFormat() const;
 
 	/**
-	 * Settings only: loads neither model nor tokenizer nor GGUF file. Appends messages (codes 2..18) to OutReport.
+	 * Settings only: loads neither model nor tokenizer nor GGUF file. Appends messages (codes 2..19, 72, 73) to OutReport.
 	 * Returns true when this call added no Error. Does not modify the package.
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintPure = false, Category = "Pipelines")

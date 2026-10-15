@@ -49,6 +49,9 @@ struct FPipelineRuntime
 	FPipelinePreprocessSettings PreprocessSettings;
 	FPipelinePostprocessSettings PostprocessSettings;
 	TArray<FString> Labels;
+	/** Two-graph tasks: the second graph (SpeechToText decoder_joint), prepared on CPU; null otherwise. */
+	TSharedPtr<IPipelineModel> DecoderModel;
+	FPipelineSpeechSettings SpeechSettings;
 
 	/** Guards ResolveTask creation only (held for the Launch call, never across the work). */
 	FCriticalSection ResolveLock;
@@ -105,7 +108,7 @@ private:
 				Info.InputDescs = Model->GetInputDescs();
 				Info.OutputDescs = Model->GetOutputDescs();
 				FPipelineValidationReport Report;
-				const bool bOk = ResolvePipelineTaskIO(Task, PreprocessSettings, PostprocessSettings, Labels.Num(),
+				const bool bOk = ResolvePipelineTaskIO(Task, PreprocessSettings, PostprocessSettings, SpeechSettings, Labels.Num(),
 					Info.InputDescs, Info.OutputDescs, Info.Bindings, Report);
 				if (!bOk || !Report.IsValid())
 				{
@@ -365,6 +368,12 @@ namespace UE::ModelPipelines::PipelineBasePrivate
 		static const TArray<FString> Default;
 		return Default;
 	}
+
+	static const FPipelineSpeechSettings& DefaultSpeech()
+	{
+		static const FPipelineSpeechSettings Default;
+		return Default;
+	}
 }
 
 FPipelineResult UPipelineBase::InitializeFromPackage(UPipelineModelPackage* InPackage)
@@ -446,12 +455,34 @@ FPipelineResult UPipelineBase::InitializeFromPackage(UPipelineModelPackage* InPa
 		return PrepareResult;
 	}
 
+	// Second graph (SpeechToText decoder_joint): same backend, always CPU (one small step per token).
+	TSharedPtr<IPipelineModel> DecoderModel;
+	if (InPackage->DecoderModel != nullptr)
+	{
+		FPipelineModelSource DecoderSource;
+		DecoderSource.Format = EPipelineModelFormat::NNE;
+		DecoderSource.NNEModel = InPackage->DecoderModel;
+		FPipelineResult DecoderResult;
+		DecoderModel = Backend.PrepareModelFromSource(DecoderSource, EPipelineDevice::CPU, DecoderResult);
+		if (!DecoderModel.IsValid())
+		{
+			if (DecoderResult.bSuccess || DecoderResult.Error == EPipelineError::None)
+			{
+				DecoderResult = FPipelineResult::Fail(EPipelineError::ModelLoadFailed, TEXT("the backend returned no model"));
+			}
+			DecoderResult.Message = TEXT("DecoderModel: ") + DecoderResult.Message;
+			return DecoderResult;
+		}
+	}
+
 	TSharedPtr<FPipelineRuntime, ESPMode::ThreadSafe> NewRuntime = MakeShared<FPipelineRuntime, ESPMode::ThreadSafe>();
 	NewRuntime->Model = MoveTemp(Model);
+	NewRuntime->DecoderModel = MoveTemp(DecoderModel);
 	NewRuntime->Task = PipelineTask;
 	NewRuntime->PreprocessSettings = InPackage->Preprocess;
 	NewRuntime->PostprocessSettings = InPackage->Postprocess;
 	NewRuntime->Labels = InPackage->Labels;
+	NewRuntime->SpeechSettings = InPackage->Speech;
 
 	// Visible to OnInitialize (settings getters, GetPackage), removed again if it fails.
 	Runtime = NewRuntime;
@@ -652,4 +683,15 @@ const FPipelinePostprocessSettings& UPipelineBase::GetPostprocessSettings() cons
 const TArray<FString>& UPipelineBase::GetLabels() const
 {
 	return Runtime.IsValid() ? Runtime->Labels : UE::ModelPipelines::PipelineBasePrivate::DefaultLabels();
+}
+
+TSharedPtr<IPipelineModel> UPipelineBase::GetDecoderModel() const
+{
+	const TSharedPtr<FPipelineRuntime, ESPMode::ThreadSafe> Rt = Runtime;
+	return Rt.IsValid() ? Rt->DecoderModel : nullptr;
+}
+
+const FPipelineSpeechSettings& UPipelineBase::GetSpeechSettings() const
+{
+	return Runtime.IsValid() ? Runtime->SpeechSettings : UE::ModelPipelines::PipelineBasePrivate::DefaultSpeech();
 }

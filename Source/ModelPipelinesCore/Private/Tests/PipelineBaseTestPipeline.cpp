@@ -6,3 +6,8 @@ UPipelineBaseTestPipeline::UPipelineBaseTestPipeline()
 {
 	PipelineTask = EPipelineTask::TextClassification;
 }
+
+UPipelineSpeechTestPipeline::UPipelineSpeechTestPipeline()
+{
+	PipelineTask = EPipelineTask::SpeechToText;
+}

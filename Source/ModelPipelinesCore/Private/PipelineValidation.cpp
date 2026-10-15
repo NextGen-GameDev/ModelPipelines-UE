@@ -27,6 +27,7 @@ const TCHAR* LexToString(EPipelineValidationCode Code)
 	case EPipelineValidationCode::WrongModelFormat: return TEXT("WrongModelFormat");
 	case EPipelineValidationCode::InvalidGgufModel: return TEXT("InvalidGgufModel");
 	case EPipelineValidationCode::LicenseNotPermissive: return TEXT("LicenseNotPermissive");
+	case EPipelineValidationCode::NoDecoderModel: return TEXT("NoDecoderModel");
 	case EPipelineValidationCode::MissingInput: return TEXT("MissingInput");
 	case EPipelineValidationCode::UnexpectedInput: return TEXT("UnexpectedInput");
 	case EPipelineValidationCode::InputTypeMismatch: return TEXT("InputTypeMismatch");
@@ -63,6 +64,8 @@ const TCHAR* LexToString(EPipelineValidationCode Code)
 	case EPipelineValidationCode::GgufSizeMismatch: return TEXT("GgufSizeMismatch");
 	case EPipelineValidationCode::GgufShaMismatch: return TEXT("GgufShaMismatch");
 	case EPipelineValidationCode::ModelsNotStagedNonUfs: return TEXT("ModelsNotStagedNonUfs");
+	case EPipelineValidationCode::UnexpectedDecoderModel: return TEXT("UnexpectedDecoderModel");
+	case EPipelineValidationCode::InvalidSpeechSettings: return TEXT("InvalidSpeechSettings");
 	default: return TEXT("Unknown");
 	}
 }

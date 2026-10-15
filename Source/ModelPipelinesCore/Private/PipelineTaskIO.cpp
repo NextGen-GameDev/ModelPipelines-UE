@@ -431,11 +431,53 @@ namespace UE::ModelPipelines::TaskIOPrivate
 			}
 		}
 	}
+
+	/** input_features [B,T,M]: B 1 or -1, T any, M NumMelBins or -1. One error message per tensor. */
+	static void CheckFeatureDims(FContext& Ctx, const FPipelineTensorDesc& Desc, int32 NumMelBins)
+	{
+		const TArray<int64>& S = Desc.Shape;
+		if (S.Num() != 3)
+		{
+			return;
+		}
+		FString Offending;
+		if (S[0] != 1 && S[0] != -1)
+		{
+			Offending = FString::Printf(TEXT("dim 0 (batch) = %lld"), (long long)S[0]);
+		}
+		if (S[2] != -1 && S[2] != (int64)NumMelBins)
+		{
+			if (!Offending.IsEmpty())
+			{
+				Offending += TEXT(", ");
+			}
+			Offending += FString::Printf(TEXT("dim 2 (mel bins) = %lld"), (long long)S[2]);
+		}
+		if (!Offending.IsEmpty())
+		{
+			Ctx.Error(ECode::InputDimMismatch, FString::Printf(
+				TEXT("%s needs input 'input_features' [batch 1 or -1, frames, mel bins %d] (mel bins may be -1); the model has %s (%s)"),
+				Ctx.TaskName, NumMelBins, *DescToString(Desc), *Offending));
+		}
+	}
+
+	/** True when Dim is -1 or Expected. */
+	static bool DimMatches(int64 Dim, int64 Expected)
+	{
+		return Dim == -1 || Dim == Expected;
+	}
 }
 
 bool ResolvePipelineTaskIO(EPipelineTask Task, const FPipelinePreprocessSettings& Settings, const FPipelinePostprocessSettings& Postprocess,
 	int32 NumLabels, TConstArrayView<FPipelineTensorDesc> Inputs, TConstArrayView<FPipelineTensorDesc> Outputs,
 	FPipelineTaskBindings& OutBindings, FPipelineValidationReport& InOutReport)
+{
+	return ResolvePipelineTaskIO(Task, Settings, Postprocess, FPipelineSpeechSettings(), NumLabels, Inputs, Outputs, OutBindings, InOutReport);
+}
+
+bool ResolvePipelineTaskIO(EPipelineTask Task, const FPipelinePreprocessSettings& Settings, const FPipelinePostprocessSettings& Postprocess,
+	const FPipelineSpeechSettings& Speech, int32 NumLabels, TConstArrayView<FPipelineTensorDesc> Inputs,
+	TConstArrayView<FPipelineTensorDesc> Outputs, FPipelineTaskBindings& OutBindings, FPipelineValidationReport& InOutReport)
 {
 	using namespace UE::ModelPipelines::TaskIOPrivate;
 
@@ -447,7 +489,8 @@ bool ResolvePipelineTaskIO(EPipelineTask Task, const FPipelinePreprocessSettings
 
 	const bool bText = IsTextTask(Task);
 	const bool bImage = IsImageTask(Task);
-	if (!bText && !bImage)
+	const bool bSpeech = Task == EPipelineTask::SpeechToText;
+	if (!bText && !bImage && !bSpeech)
 	{
 		Ctx.Error(ECode::NoTask, FString::Printf(TEXT("Task is %s: no task I/O to resolve"), LexToString(Task)));
 		return false;
@@ -457,7 +500,28 @@ bool ResolvePipelineTaskIO(EPipelineTask Task, const FPipelinePreprocessSettings
 	TArray<bool> OutputBound;
 	OutputBound.SetNumZeroed(Outputs.Num());
 
-	if (bText)
+	if (bSpeech)
+	{
+		const FInputSpec Specs[] = {{TEXT("input_features"), true, ETypeKind::Float, 3, &OutBindings.InputFeatures}};
+		ResolveInputs(Ctx, Specs, [&Ctx, &Speech](int32 SpecIndex, int32 InputIndex)
+		{
+			CheckFeatureDims(Ctx, Ctx.Inputs[InputIndex], Speech.NumMelBins);
+		});
+
+		const TCHAR* Preferred[] = {TEXT("encoder_projected")};
+		OutBindings.MainOutput = ResolveMainOutput(Ctx, Preferred, 3, OutputBound);
+		if (OutBindings.MainOutput >= 0)
+		{
+			const FPipelineTensorDesc& Desc = Outputs[OutBindings.MainOutput];
+			if (!DimMatches(Desc.Shape[0], 1))
+			{
+				Ctx.Error(ECode::OutputDimMismatch, FString::Printf(
+					TEXT("%s needs output '%s' [batch 1 or -1, frames, dim]; the model has %s (dim 0 (batch) = %lld)"),
+					Ctx.TaskName, *Desc.Name, *DescToString(Desc), (long long)Desc.Shape[0]));
+			}
+		}
+	}
+	else if (bText)
 	{
 		const FInputSpec Specs[] = {
 			{TEXT("input_ids"), true, ETypeKind::Int, 2, &OutBindings.InputIds},
@@ -516,6 +580,120 @@ bool ResolvePipelineTaskIO(EPipelineTask Task, const FPipelinePreprocessSettings
 			CheckClassificationLabels(Ctx, OutBindings.MainOutput, NumLabels);
 		}
 	}
+
+	return Ctx.NumErrorsAdded == 0;
+}
+
+bool ResolveSpeechDecoderIO(const FPipelineSpeechSettings& Speech, int32 EncoderDim, TConstArrayView<FPipelineTensorDesc> Inputs,
+	TConstArrayView<FPipelineTensorDesc> Outputs, FPipelineSpeechDecoderBindings& OutBindings, FPipelineValidationReport& InOutReport)
+{
+	using namespace UE::ModelPipelines::TaskIOPrivate;
+
+	OutBindings = FPipelineSpeechDecoderBindings();
+
+	FContext Ctx(InOutReport);
+	Ctx.TaskName = TEXT("SpeechToText decoder");
+	Ctx.Inputs = Inputs;
+	Ctx.Outputs = Outputs;
+
+	const FInputSpec Specs[] = {
+		{TEXT("encoder_frame"), true, ETypeKind::Float, 2, &OutBindings.EncoderFrame},
+		{TEXT("token"), true, ETypeKind::Int, 1, &OutBindings.Token},
+		{TEXT("state_h"), true, ETypeKind::Float, 3, &OutBindings.StateH},
+		{TEXT("state_c"), true, ETypeKind::Float, 3, &OutBindings.StateC}};
+	ResolveInputs(Ctx, Specs, [&Ctx, EncoderDim, &OutBindings](int32 SpecIndex, int32 InputIndex)
+	{
+		const FPipelineTensorDesc& Desc = Ctx.Inputs[InputIndex];
+		if (SpecIndex == 0)
+		{
+			const bool bBatchOk = DimMatches(Desc.Shape[0], 1);
+			const bool bDimOk = EncoderDim <= 0 || DimMatches(Desc.Shape[1], EncoderDim);
+			if (!bBatchOk || !bDimOk)
+			{
+				const FString Expected = EncoderDim > 0 ? FString::Printf(TEXT("%d (encoder dim) or -1"), EncoderDim) : FString(TEXT("any"));
+				Ctx.Error(ECode::InputDimMismatch, FString::Printf(TEXT("%s needs input 'encoder_frame' [1 or -1, %s]; the model has %s"),
+					Ctx.TaskName, *Expected, *DescToString(Desc)));
+			}
+		}
+		else if (SpecIndex == 1)
+		{
+			// token is int64 only (the shared Int kind also accepts int32).
+			if (Desc.Type != EPipelineTensorType::Int64)
+			{
+				Ctx.Error(ECode::InputTypeMismatch, FString::Printf(TEXT("%s needs input 'token' as int64 (rank 1); the model has %s"),
+					Ctx.TaskName, *DescToString(Desc)));
+				OutBindings.Token = -1;
+			}
+			else if (!DimMatches(Desc.Shape[0], 1))
+			{
+				Ctx.Error(ECode::InputDimMismatch, FString::Printf(TEXT("%s needs input 'token' [1 or -1]; the model has %s"),
+					Ctx.TaskName, *DescToString(Desc)));
+			}
+		}
+	});
+
+	if (OutBindings.StateH >= 0 && OutBindings.StateC >= 0 && Inputs[OutBindings.StateH].Shape != Inputs[OutBindings.StateC].Shape)
+	{
+		Ctx.Error(ECode::InputDimMismatch, FString::Printf(TEXT("%s needs inputs 'state_h' and 'state_c' with equal dims; the model has %s and %s"),
+			Ctx.TaskName, *DescToString(Inputs[OutBindings.StateH]), *DescToString(Inputs[OutBindings.StateC])));
+	}
+
+	struct FOutputSpec
+	{
+		const TCHAR* Name;
+		int32 Rank;
+		int32* Binding;
+	};
+	const FOutputSpec OutSpecs[] = {
+		{TEXT("token_logits"), 2, &OutBindings.TokenLogits},
+		{TEXT("duration_logits"), 2, &OutBindings.DurationLogits},
+		{TEXT("state_h_out"), 3, &OutBindings.StateHOut},
+		{TEXT("state_c_out"), 3, &OutBindings.StateCOut}};
+	for (const FOutputSpec& Spec : OutSpecs)
+	{
+		const int32 Index = FindByName(Outputs, Spec.Name);
+		if (Index < 0)
+		{
+			Ctx.Error(ECode::MissingOutput, FString::Printf(TEXT("%s needs output '%s' (float32, rank %d); the model has outputs: %s"),
+				Ctx.TaskName, Spec.Name, Spec.Rank, *ListToString(Outputs)));
+			continue;
+		}
+		if (CheckOutputTypeRank(Ctx, Spec.Name, Outputs[Index], Spec.Rank))
+		{
+			*Spec.Binding = Index;
+		}
+	}
+
+	auto CheckLogits = [&Ctx, &Outputs](int32 Index, int64 Expected, const TCHAR* What)
+	{
+		if (Index < 0)
+		{
+			return;
+		}
+		const FPipelineTensorDesc& Desc = Outputs[Index];
+		if (!DimMatches(Desc.Shape[0], 1) || !DimMatches(Desc.Shape[1], Expected))
+		{
+			Ctx.Error(ECode::OutputDimMismatch, FString::Printf(TEXT("%s needs output '%s' [1 or -1, %lld (%s) or -1]; the model has %s"),
+				Ctx.TaskName, *Desc.Name, (long long)Expected, What, *DescToString(Desc)));
+		}
+	};
+	CheckLogits(OutBindings.TokenLogits, (int64)Speech.BlankTokenId + 1, TEXT("BlankTokenId + 1"));
+	CheckLogits(OutBindings.DurationLogits, (int64)Speech.Durations.Num(), TEXT("Durations count"));
+
+	auto CheckStateOut = [&Ctx, &Inputs, &Outputs](int32 OutIndex, int32 InIndex)
+	{
+		if (OutIndex < 0 || InIndex < 0)
+		{
+			return;
+		}
+		if (Outputs[OutIndex].Shape != Inputs[InIndex].Shape)
+		{
+			Ctx.Error(ECode::OutputDimMismatch, FString::Printf(TEXT("%s needs output '%s' with the dims of input %s; the model has %s"),
+				Ctx.TaskName, *Outputs[OutIndex].Name, *DescToString(Inputs[InIndex]), *DescToString(Outputs[OutIndex])));
+		}
+	};
+	CheckStateOut(OutBindings.StateHOut, OutBindings.StateH);
+	CheckStateOut(OutBindings.StateCOut, OutBindings.StateC);
 
 	return Ctx.NumErrorsAdded == 0;
 }

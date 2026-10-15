@@ -6,6 +6,7 @@
 
 #include "CoreMinimal.h"
 #include "PipelineBase.h"
+#include "PipelineModelPackage.h"
 #include "PipelineBaseTestPipeline.generated.h"
 
 /** Concrete UPipelineBase for the WP3.2 tests (TextClassification). Exposes the protected API. */
@@ -27,4 +28,18 @@ public:
 	const FPipelinePreprocessSettings& PeekPreprocessSettings() const { return GetPreprocessSettings(); }
 	const FPipelinePostprocessSettings& PeekPostprocessSettings() const { return GetPostprocessSettings(); }
 	const TArray<FString>& PeekLabels() const { return GetLabels(); }
+};
+
+/** Concrete UPipelineBase with PipelineTask = SpeechToText (WP9S.3). Exposes the protected two-graph API. */
+UCLASS(Transient, NotBlueprintable)
+class UPipelineSpeechTestPipeline : public UPipelineBase
+{
+	GENERATED_BODY()
+
+public:
+	UPipelineSpeechTestPipeline();
+
+	TSharedPtr<IPipelineModel> PeekDecoderModel() const { return GetDecoderModel(); }
+	TSharedPtr<IPipelineModel> PeekModel() const { return GetModel(); }
+	const FPipelineSpeechSettings& PeekSpeechSettings() const { return GetSpeechSettings(); }
 };

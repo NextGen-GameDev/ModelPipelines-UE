@@ -153,6 +153,11 @@ Phonon-2 (CC-BY-4.0 weights, FermionResearch) is a Parakeet-TDT; the container i
    (speed, RSS, parity data) and then all 2620 test-clean utterances (corpus WER with the Whisper `EnglishTextNormalizer`, `stt/wer.py`);
    `python check_phonon2_onnx.py --variant-report` combines the runs into `<dev>/logs/m9/wp9s1b_report.json` and `.md`.
    Pass bar: S1 single file < 2 GB; S2 WER <= fp32 + 0.10 pp; S3 text identical to fp32 on >= 38/40 clips.
+5. STT goldens (WP9S.2, contract C71): `python make_stt_goldens.py [--clips FILE] [--out DIR] [--variant fp16w]` writes
+   `<dev>/goldens/stt/stt_goldens.json` plus raw float32 sidecars (`mel_filters.f32`, `audio/`, `features/`, `logmel/`) for the 40 visible
+   clips and 6 synthetic ones: HF fp32 decode (ground truth), ORT decode of the shipping variant, word frames, and the extractor's
+   features. Deterministic (rerun is byte-identical). `tests/test_stt_goldens.py` also re-derives features with an independent numpy
+   STFT (`stt/goldens.py`). Run both with `micromamba run -n pipelines-stt python ...`.
 Tests: `python -m pytest tests/test_stt_phonon2.py tests/test_stt_variants.py -q` (offline; skips when models/test data are absent).
 
 Tiny speech-to-text test graphs (WP9S.3t, contract C72c): `make_test_models.py` also builds `tiny_stt_encoder.onnx`,

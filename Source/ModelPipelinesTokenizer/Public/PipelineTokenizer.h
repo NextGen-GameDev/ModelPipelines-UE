@@ -63,6 +63,15 @@ public:
 	/** Vocabulary size including added tokens. -1 when not initialized or on a library error. Clamped to MAX_int32. */
 	int32 GetVocabSize();
 
+	/** Decodes ids to text, like HF tokenizer.decode(ids, skip_special_tokens).
+	    Empty Ids -> true, OutText "". A negative id -> false (no library call).
+	    Not initialized / library error -> false, OutText "". */
+	bool Decode(TConstArrayView<int32> Ids, bool bSkipSpecialTokens, FString& OutText);
+
+	/** The vocabulary piece of one id (e.g. "▁hello"). An id not in the vocabulary -> true, OutPiece "".
+	    Negative id / not initialized / library error -> false, OutPiece "". */
+	bool IdToToken(int32 Id, FString& OutPiece);
+
 	/** Message from the most recent call on this object: "" if that call succeeded. */
 	FString GetLastError() const;
 

@@ -295,6 +295,102 @@ int32 UPipelineTokenizer::GetVocabSize()
 	return Size > static_cast<size_t>(MAX_int32) ? MAX_int32 : static_cast<int32>(Size);
 }
 
+bool UPipelineTokenizer::Decode(TConstArrayView<int32> Ids, bool bSkipSpecialTokens, FString& OutText)
+{
+	const TCHAR* Fn = TEXT("Decode");
+	FScopeLock Lock(&Mutex);
+	LastError.Reset();
+	OutText.Reset();
+
+	if (Tokenizer == nullptr)
+	{
+		SetError(Fn, TEXT("tokenizer is not initialized"));
+		return false;
+	}
+	for (int32 Index = 0; Index < Ids.Num(); ++Index)
+	{
+		if (Ids[Index] < 0)
+		{
+			SetError(Fn, FString::Printf(TEXT("id %d at index %d is negative"), Ids[Index], Index));
+			return false;
+		}
+	}
+	if (Ids.Num() == 0)
+	{
+		return true;
+	}
+
+	TArray<uint32> Data;
+	Data.SetNumUninitialized(Ids.Num());
+	for (int32 Index = 0; Index < Ids.Num(); ++Index)
+	{
+		Data[Index] = static_cast<uint32>(Ids[Index]);
+	}
+
+	int32 Status = mpt_tokenizers_decode(Tokenizer, Data.GetData(), static_cast<size_t>(Data.Num()), bSkipSpecialTokens ? 1 : 0);
+	if (Status != MPT_TOKENIZERS_OK)
+	{
+		SetError(Fn, FString::Printf(TEXT("mpt_tokenizers_decode failed (%d): %s"), Status, *TokPrivate::LibraryError()));
+		return false;
+	}
+
+	// The decode string is owned by the handle and valid until the next call on it: copy it out under the lock.
+	const char* Str = nullptr;
+	size_t Len = 0;
+	Status = mpt_tokenizers_get_decode_str(Tokenizer, &Str, &Len);
+	if (Status != MPT_TOKENIZERS_OK)
+	{
+		SetError(Fn, FString::Printf(TEXT("mpt_tokenizers_get_decode_str failed (%d): %s"), Status, *TokPrivate::LibraryError()));
+		return false;
+	}
+	if (Len > static_cast<size_t>(MAX_int32))
+	{
+		SetError(Fn, FString::Printf(TEXT("decoded text has %llu bytes, more than a string can hold"),
+			static_cast<unsigned long long>(Len)));
+		return false;
+	}
+	OutText = TokPrivate::Utf8ToFString(Str, Len);
+	return true;
+}
+
+bool UPipelineTokenizer::IdToToken(int32 Id, FString& OutPiece)
+{
+	const TCHAR* Fn = TEXT("IdToToken");
+	FScopeLock Lock(&Mutex);
+	LastError.Reset();
+	OutPiece.Reset();
+
+	if (Tokenizer == nullptr)
+	{
+		SetError(Fn, TEXT("tokenizer is not initialized"));
+		return false;
+	}
+	if (Id < 0)
+	{
+		SetError(Fn, FString::Printf(TEXT("id %d is negative"), Id));
+		return false;
+	}
+
+	// The piece is owned by the handle and valid until the next call on it: copy it out under the lock.
+	const char* Str = nullptr;
+	size_t Len = 0;
+	const int32 Status = mpt_tokenizers_id_to_token(Tokenizer, static_cast<uint32_t>(Id), &Str, &Len);
+	if (Status != MPT_TOKENIZERS_OK)
+	{
+		SetError(Fn, FString::Printf(TEXT("mpt_tokenizers_id_to_token failed (%d): %s"), Status, *TokPrivate::LibraryError()));
+		return false;
+	}
+	if (Len > static_cast<size_t>(MAX_int32))
+	{
+		SetError(Fn, FString::Printf(TEXT("piece has %llu bytes, more than a string can hold"),
+			static_cast<unsigned long long>(Len)));
+		return false;
+	}
+	// Len == 0: the id is not in the vocabulary (still OK) -> "".
+	OutPiece = TokPrivate::Utf8ToFString(Str, Len);
+	return true;
+}
+
 FString UPipelineTokenizer::GetLastError() const
 {
 	FScopeLock Lock(&Mutex);

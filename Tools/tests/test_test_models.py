@@ -62,6 +62,24 @@ EXPECT = {
     "int_ops.onnx": ([("ids", I64, ["batch", "seq"]), ("mask", I32, ["batch", "seq"])],
                      [("ids_plus_one", I64, ["batch", "seq"]), ("mask_half", F, ["batch", "seq"])]),
     "half_io.onnx": ([("h", F16, [2])], [("h_out", F16, [2])]),
+    "tiny_stt_encoder.onnx": ([("input_features", F, [1, "frames", 8])],
+                              [("encoder_projected", F, [1, "frames", 4])]),
+    "tiny_stt_decoder_joint.onnx": (
+        [("encoder_frame", F, [1, 4]), ("token", I64, [1]),
+         ("state_h", F, [2, 1, 4]), ("state_c", F, [2, 1, 4])],
+        [("token_logits", F, [1, 6]), ("duration_logits", F, [1, 3]),
+         ("state_h_out", F, [2, 1, 4]), ("state_c_out", F, [2, 1, 4])]),
+    "tiny_stt_bad_decoder.onnx": (
+        [("encoder_frame", F, [1, 4]), ("token", F, [1]),
+         ("state_h", F, [2, 1, 4]), ("state_c", F, [2, 1, 4])],
+        [("token_logits", F, [1, 6]), ("duration_logits", F, [1, 3]),
+         ("state_h_out", F, [2, 1, 4]), ("state_c_out", F, [2, 1, 4])]),
+}
+OLD_SHA = {
+    "affine_dynamic.onnx": "9b0bdee58397fc137abbbb08ec711ee2e72c42839325a268affecd50984746d9",
+    "affine_static.onnx": "760a26d3eeeda61e2e90ccdd4756f71d5b3ccc87e0989223518020c1e4e77c92",
+    "int_ops.onnx": "1f5e05ec86f9b3304c262dfc09fd0182286b6c272fdc8410ecb418b71f4cafdd",
+    "half_io.onnx": "025653452645dd619b100ae20eaffeba2234875e91f6d6448c35665f4e40ae84",
 }
 
 
@@ -204,3 +222,80 @@ def test_dev_dir_env(tmp_path):
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "goldens" / "test_models" / "test_models.json").is_file()
     assert not any(n.endswith(".onnx") for n in os.listdir(TOOLS))
+
+
+def mm(a, b):
+    # numpy's BLAS matmul crashes natively in this env; use a plain broadcast sum (float64 accumulate)
+    return (a.astype(np.float64)[..., :, None] * b.astype(np.float64)).sum(-2)
+
+
+@pytest.mark.parametrize("fn", list(OLD_SHA))
+def test_existing_models_bytes_unchanged(built, fn):
+    assert sha(os.path.join(built[0], fn)) == OLD_SHA[fn]
+
+
+def test_tiny_stt_runs_in_ort(built):
+    import onnxruntime as ort
+    mdir, doc, _ = built
+    for fn in ("tiny_stt_encoder.onnx", "tiny_stt_decoder_joint.onnx", "tiny_stt_bad_decoder.onnx"):
+        ort.InferenceSession(os.path.join(mdir, fn), providers=["CPUExecutionProvider"])
+    _, enc = by_id(doc, "tiny_stt_encoder.onnx")
+    assert list(enc) == ["frames1", "frames3", "frames7"]
+    for T in (1, 3, 7):
+        c = enc[f"frames{T}"]
+        assert c["inputs"][0]["shape"] == [1, T, 8] and c["outputs"][0]["shape"] == [1, T, 4]
+        x = arr(c["inputs"][0], np.float32)
+        w = mtm.W_ENC
+        assert np.allclose(arr(c["outputs"][0], np.float32), mm(x, w), rtol=1e-5, atol=1e-5)
+    m, bad = by_id(doc, "tiny_stt_bad_decoder.onnx")
+    assert bad == {} and m["inputs"][1]["type"] == "float32"
+
+
+def test_tiny_stt_decoder_math(built):
+    m, dec = by_id(built[1], "tiny_stt_decoder_joint.onnx")
+    assert list(dec) == ["blank_zero_state", "token0", "token4", "nonzero_state"]
+    assert m["inputs"][1] == {"name": "token", "type": "int64", "shape": [1]}
+    for c in dec.values():
+        fr = arr(c["inputs"][0], np.float32)
+        tok = int(c["inputs"][1]["data"][0])
+        sh, sc = arr(c["inputs"][2], np.float32), arr(c["inputs"][3], np.float32)
+        o = {t["name"]: arr(t, np.float32) for t in c["outputs"]}
+        assert np.allclose(o["token_logits"], mm(fr, mtm.W1) + mtm.E[tok][None], atol=1e-6)
+        assert np.allclose(o["duration_logits"], mm(fr, mtm.W3), atol=1e-6)
+        assert np.allclose(o["state_h_out"], sh + 1, atol=1e-6)
+        assert np.allclose(o["state_c_out"], sc * 0.5, atol=1e-6)
+    assert dec["blank_zero_state"]["inputs"][1]["data"] == [5]
+    assert any(v != 0 for v in dec["nonzero_state"]["inputs"][2]["data"])
+
+
+def test_tiny_stt_greedy(built):
+    import onnxruntime as ort
+    mdir, doc, _ = built
+    g = doc["tiny_stt_greedy"]
+    assert g["num_mel_bins"] == 8 and g["blank_token_id"] == 5 and g["durations"] == [0, 1, 2]
+    assert len(g["frames"]) == 6 and all(len(f) == 4 for f in g["frames"])
+    steps = g["steps"]
+    # recompute with the C70 loop from the ONNX file, independent of the script's helper
+    sess = ort.InferenceSession(os.path.join(mdir, "tiny_stt_decoder_joint.onnx"),
+                                providers=["CPUExecutionProvider"])
+    F = len(g["frames"])
+    t, token, steps2 = 0, 5, []
+    sh = sc = np.zeros((2, 1, 4), np.float32)
+    forced = False
+    while t < F and len(steps2) < 10 * F - 1:
+        tl, dl, h2, c2 = sess.run(None, {"encoder_frame": np.array([g["frames"][t]], np.float32),
+                                         "token": np.array([token], np.int64),
+                                         "state_h": sh, "state_c": sc})
+        k, d = int(np.argmax(tl)), [0, 1, 2][int(np.argmax(dl))]
+        if k == 5 and d == 0:
+            d, forced = 1, True
+        steps2.append([k, d])
+        if k != 5:
+            token, sh, sc = k, h2, c2
+        t += d
+    assert steps == steps2
+    assert g["ids"] == [k for k, d in steps if k != 5]
+    assert any(k != 5 and d == 0 for k, d in steps)
+    assert forced
+    assert any(d == 2 for k, d in steps)
+    assert len(steps) < 10 * F - 1

@@ -16,7 +16,8 @@ import _paths  # noqa: E402
 
 SCHEMA = "pipelines-test-model-goldens/1"
 SCRIPT = "Tools/make_test_goldens.py"
-FILES = ["affine_dynamic.onnx", "affine_static.onnx", "int_ops.onnx", "half_io.onnx"]
+FILES = ["affine_dynamic.onnx", "affine_static.onnx", "int_ops.onnx", "half_io.onnx",
+         "tiny_stt_encoder.onnx", "tiny_stt_decoder_joint.onnx", "tiny_stt_bad_decoder.onnx"]
 EDGE = [0.0, -0.0, 1.0, -1.0, 0.1, 1e-3, -1e6, 1e6, 8.5e37]
 ORT_TYPES = {"tensor(float)": "float32", "tensor(int64)": "int64",
              "tensor(int32)": "int32", "tensor(float16)": "float16"}
@@ -70,6 +71,42 @@ def run_case(sess, cid, feeds):
             "outputs": [tensor(n, types[n], o) for n, o in zip(names, outs)]}
 
 
+GREEDY_FRAMES = [[1.5, 0.0, 0.0, 0.0], [0.0, 2.5, 0.0, 0.0], [0.0, 0.0, 2.5, 0.0],
+                 [0.0, 0.0, 0.0, 2.5], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.3, 0.0]]
+BLANK = 5
+DURATIONS = [0, 1, 2]
+
+
+def greedy_steps(sess, frames):
+    """The C70 greedy loop over tiny_stt_decoder_joint (first max on ties)."""
+    F = len(frames)
+    t, token = 0, BLANK
+    sh = np.zeros((2, 1, 4), dtype=np.float32)
+    sc = np.zeros((2, 1, 4), dtype=np.float32)
+    steps = []
+    while t < F and len(steps) < 10 * F - 1:
+        tl, dl, h2, c2 = sess.run(None, {
+            "encoder_frame": np.array([frames[t]], dtype=np.float32),
+            "token": np.array([token], dtype=np.int64), "state_h": sh, "state_c": sc})
+        k = int(np.argmax(tl))
+        d = DURATIONS[int(np.argmax(dl))]
+        if k == BLANK and d == 0:
+            d = 1
+        steps.append([k, d])
+        if k != BLANK:
+            token, sh, sc = k, h2, c2
+        t += d
+    return steps
+
+
+def greedy_block(models_dir):
+    sess = ort.InferenceSession(os.path.join(models_dir, "tiny_stt_decoder_joint.onnx"),
+                                providers=["CPUExecutionProvider"])
+    steps = greedy_steps(sess, GREEDY_FRAMES)
+    return {"num_mel_bins": 8, "blank_token_id": BLANK, "durations": DURATIONS,
+            "frames": GREEDY_FRAMES, "steps": steps, "ids": [k for k, d in steps if k != BLANK]}
+
+
 def build(models_dir, seed, batches):
     rng = np.random.default_rng(seed)
     models = []
@@ -89,6 +126,25 @@ def build(models_dir, seed, batches):
                 ids = gen_ids(rng, b * s).reshape(b, s)
                 mask = rng.integers(0, 2, size=b * s).astype(np.int32).reshape(b, s)
                 cases.append(run_case(sess, cid, [("ids", ids), ("mask", mask)]))
+        elif fn == "tiny_stt_encoder.onnx":
+            srng = np.random.default_rng([seed, 72])
+            for T in (1, 3, 7):
+                x = gen_float(srng, T * 8).reshape(1, T, 8)
+                cases.append(run_case(sess, f"frames{T}", [("input_features", x)]))
+        elif fn == "tiny_stt_decoder_joint.onnx":
+            srng = np.random.default_rng([seed, 73])
+            z = np.zeros((2, 1, 4), dtype=np.float32)
+            f = lambda *v: np.array([v], dtype=np.float32)  # noqa: E731
+            hs = srng.uniform(-2, 2, size=8).astype(np.float32).reshape(2, 1, 4)
+            cs = srng.uniform(-2, 2, size=8).astype(np.float32).reshape(2, 1, 4)
+            for cid, fr, tok, sh, sc in (
+                    ("blank_zero_state", f(0.5, -0.25, 1.0, 0.125), 5, z, z),
+                    ("token0", f(1.5, 0.0, 0.0, 0.0), 0, z, z),
+                    ("token4", f(-0.5, 0.75, 1.25, 1.0), 4, z, z),
+                    ("nonzero_state", f(0.0, 2.5, 0.0, 0.5), 2, hs, cs)):
+                cases.append(run_case(sess, cid, [("encoder_frame", fr),
+                                                  ("token", np.array([tok], dtype=np.int64)),
+                                                  ("state_h", sh), ("state_c", sc)]))
         models.append({
             "file": fn,
             "sha256": sha256_file(path),
@@ -98,10 +154,12 @@ def build(models_dir, seed, batches):
                         for o in sess.get_outputs()],
             "cases": cases,
         })
-    return {"schema": SCHEMA,
+    doc = {"schema": SCHEMA,
             "generator": {"script": SCRIPT, "onnxruntime": ort.__version__, "onnx": onnx.__version__,
                           "numpy": np.__version__, "seed": seed, "batches": list(batches)},
             "models": models}
+    doc["tiny_stt_greedy"] = greedy_block(models_dir)
+    return doc
 
 
 def main():

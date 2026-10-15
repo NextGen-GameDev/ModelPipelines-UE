@@ -16,7 +16,8 @@ sys.path.insert(0, HERE)
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--variant", default="fp32", choices=["fp32"], help="only fp32 exists in WP9S.1a")
+    ap.add_argument("--variant", default="fp32", choices=["fp32", "fp16w", "int8", "fp16"],
+                    help="fp32 = full export; fp16w/int8/fp16 are shipping variants built from fp32/ (WP9S.1b)")
     ap.add_argument("--out", default=None, help="output folder (default <dev>/models/stt/phonon-2-onnx/<variant>)")
     ap.add_argument("--force", action="store_true", help="re-export even if SOURCE.json hashes match")
     a = ap.parse_args(argv)
@@ -40,6 +41,8 @@ def main(argv=None):
         print("container sha256 mismatch: %s" % got)
         return 1
 
+    if a.variant != "fp32":
+        return _variant(a, p, out, ex)
     tmp = out + ".tmp"
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(tmp)
@@ -53,6 +56,31 @@ def main(argv=None):
         ex.check_onnx(tmp)
         ex.assert_c70(tmp)
         ex.write_source_json(tmp, a.variant)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    shutil.rmtree(out, ignore_errors=True)
+    os.replace(tmp, out)
+    print("wrote %s" % out)
+    _print_hashes(out)
+    return 0
+
+
+def _variant(a, p, out, ex):
+    from stt import phonon2_variants as pv
+    fp32 = os.path.join(p["out_root"], "fp32")
+    tmp = out + ".tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    try:
+        model = None
+        if a.variant == "fp16":
+            model, _ = ex.load_model(p["container"], p["base_dir"])
+        notes = pv.build_variant(a.variant, fp32, tmp, model)
+        del model
+        s1 = pv.check_s1(tmp)
+        print("S1 check: %s" % s1)
+        pv.write_variant_source(tmp, a.variant, fp32, notes)
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
         raise

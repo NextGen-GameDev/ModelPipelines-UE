@@ -146,4 +146,18 @@ Phonon-2 (CC-BY-4.0 weights, FermionResearch) is a Parakeet-TDT; the container i
    speaker, duration closest to 8 s).
 3. `python check_phonon2_onnx.py --variant fp32 --clips <dev>/goldens/stt/clips_visible.json` compares ORT with Hugging Face
    (graph parity, step-for-step greedy TDT loop, edge checks) and writes `<dev>/logs/m9/wp9s1a_report.json` and `.md`.
-Tests: `python -m pytest tests/test_stt_phonon2.py -q` (offline; skips when models/test data are absent).
+4. WP9S.1b shipping variants (single `encoder.onnx` under 2 GB, float32 I/O, `decoder_joint.onnx` copied byte-identical from fp32):
+   `python export_phonon2_onnx.py --variant {fp16w,int8,fp16}` builds `<dev>/models/stt/phonon-2-onnx/<variant>/` from `fp32/`
+   (fp16w: fp16 initializers with >= 1024 elements plus a Cast back to fp32; int8: `quantize_dynamic` QInt8 per-channel MatMul only;
+   fp16: `model.half()` export, best effort). `python check_phonon2_onnx.py --wer --variant <v> --clips all` runs the 40 visible clips
+   (speed, RSS, parity data) and then all 2620 test-clean utterances (corpus WER with the Whisper `EnglishTextNormalizer`, `stt/wer.py`);
+   `python check_phonon2_onnx.py --variant-report` combines the runs into `<dev>/logs/m9/wp9s1b_report.json` and `.md`.
+   Pass bar: S1 single file < 2 GB; S2 WER <= fp32 + 0.10 pp; S3 text identical to fp32 on >= 38/40 clips.
+Tests: `python -m pytest tests/test_stt_phonon2.py tests/test_stt_variants.py -q` (offline; skips when models/test data are absent).
+
+Tiny speech-to-text test graphs (WP9S.3t, contract C72c): `make_test_models.py` also builds `tiny_stt_encoder.onnx`,
+`tiny_stt_decoder_joint.onnx` and `tiny_stt_bad_decoder.onnx` (Phonon I/O names at toy sizes; the bad decoder takes a float32
+`token` and is deliberately wrong for C70). `make_test_goldens.py` writes their cases plus a top-level `tiny_stt_greedy` block
+(6 encoder frames and the C70 greedy steps/ids computed with onnxruntime). The existing 4 models keep their exact bytes.
+Note: numpy matmul crashes when the env's python.exe is called un-activated (its `Library\bin` is not on PATH); use
+`micromamba run -n <env> python` for scripts that do matrix maths.

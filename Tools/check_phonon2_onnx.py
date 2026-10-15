@@ -1,6 +1,8 @@
 """Check the Phonon-2 ONNX export against Hugging Face and write the WP9S.1a report (contract C70).
 
   python check_phonon2_onnx.py --make-clips visible            # writes <dev>/goldens/stt/clips_visible.json
+  python check_phonon2_onnx.py --wer --variant fp16w --clips all   # WP9S.1b: 40-clip eval + test-clean WER
+  python check_phonon2_onnx.py --variant-report                    # WP9S.1b: combine into wp9s1b_report
   python check_phonon2_onnx.py --variant fp32 --clips <dev>/goldens/stt/clips_visible.json [--report-dir DIR]
 
 Steps: (1) graph parity on the first --parity-clips clips (encoder vs get_audio_features, decoder_joint on 50 real
@@ -294,6 +296,175 @@ def write_md(rep, path):
         f.write("\n".join(L) + "\n")
 
 
+def ort_decode(proc, ort, wav):
+    """Encoder + greedy TDT on one waveform with ORT only (no HF model). -> dict."""
+    from stt import tdt_greedy as tg
+    inp = proc([wav], sampling_rate=16000, return_tensors="pt", padding=True)
+    feats = valid_features(inp)
+    t0 = time.perf_counter()
+    enc = ort.encode(feats)
+    enc_ms = (time.perf_counter() - t0) * 1000
+    n0, c0 = ort.step_ns, ort.step_count
+    t0 = time.perf_counter()
+    steps, ids = tg.greedy_tdt(ort.step, enc, max_steps=10 * (int(enc.shape[0]) + 1) - 1)
+    dec_ms = (time.perf_counter() - t0) * 1000
+    seq, dur = tg.sequences_and_durations(steps)
+    text = proc.batch_decode([ids], skip_special_tokens=True)[0].strip()
+    return {"seq": seq, "dur": dur, "text": text, "enc": enc, "enc_ms": enc_ms, "dec_ms": dec_ms,
+            "step_ns": ort.step_ns - n0, "step_count": ort.step_count - c0}
+
+
+def eval_variant(variant, clips_file, do_wer, report_dir, dev, p):
+    """One process, one encoder session: 40 visible clips (parity data for the variant report, speed, RSS),
+    then optionally the full test-clean WER run. Writes wp9s1b_eval_<variant>.json/.npz and the hyp jsonl."""
+    from stt import clips as cl
+    from stt import wer as wr
+    from stt.tdt_greedy import OrtTdt
+    from transformers import AutoProcessor
+    folder = os.path.join(p["out_root"], variant)
+    proc = AutoProcessor.from_pretrained(p["base_dir"])
+    t0 = time.perf_counter()
+    ort = OrtTdt(folder)
+    create_s = time.perf_counter() - t0
+    rows = cl.load_clips(clips_file)
+    res, encs = [], {}
+    for row in rows:
+        wav = cl.read_audio(cl.clip_abs_path(row, dev))
+        r = ort_decode(proc, ort, wav)
+        encs[row["id"]] = r.pop("enc")
+        r.update(id=row["id"], seconds=len(wav) / 16000)
+        res.append(r)
+    secs = sum(r["seconds"] for r in res)
+    steps = sum(r["step_count"] for r in res)
+    enc_ms = [r["enc_ms"] for r in res]
+    out = {"variant": variant, "session_create_s": round(create_s, 2), "clips": res,
+           "encoder_ms_mean": round(sum(enc_ms) / len(enc_ms), 1), "encoder_ms_max": round(max(enc_ms), 1),
+           "decoder_joint_us_per_step": round(sum(r["step_ns"] for r in res) / max(1, steps) / 1000, 1),
+           "rtf": round(sum(r["enc_ms"] + r["dec_ms"] for r in res) / 1000 / secs, 4),
+           "audio_seconds": round(secs, 2), "peak_rss_mb_40clips": peak_rss_mb(), "ops": op_report(folder)}
+    os.makedirs(report_dir, exist_ok=True)
+    np.savez(os.path.join(report_dir, "wp9s1b_eval_%s.npz" % variant), **encs)
+    if do_wer:
+        root = os.path.join(dev, "testdata", "stt", "librispeech", "LibriSpeech", "test-clean")
+        allrows = cl.scan_split(root)
+        nz = wr.make_normalizer()
+        hp = os.path.join(report_dir, "wp9s1b_hyp_%s.jsonl" % variant)
+        refs, hyps, tsec, tcomp = [], [], 0.0, 0.0
+        with open(hp, "w", encoding="utf-8", newline="\n") as f:
+            for i, row in enumerate(allrows):
+                wav = cl.read_audio(row["abs_path"])
+                r = ort_decode(proc, ort, wav)
+                tsec += len(wav) / 16000
+                tcomp += (r["enc_ms"] + r["dec_ms"]) / 1000
+                f.write(json.dumps({"id": row["id"], "ref": row["ref"], "hyp": r["text"]}, ensure_ascii=False) + "\n")
+                refs.append(nz(row["ref"]))
+                hyps.append(nz(r["text"]))
+                if i % 100 == 0:
+                    print("%d/%d wer so far %.3f%%" % (i, len(allrows), 100 * wr.corpus_wer(refs, hyps)["wer"]), flush=True)
+        w = wr.corpus_wer(refs, hyps)
+        out["wer"] = dict(w, utterances=len(allrows), audio_seconds=round(tsec, 1), rtf=round(tcomp / tsec, 4))
+        print("WER %s: %.4f%% over %d utterances" % (variant, 100 * w["wer"], len(allrows)), flush=True)
+    out["peak_rss_mb"] = peak_rss_mb()
+    with open(os.path.join(report_dir, "wp9s1b_eval_%s.json" % variant), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(out, f, indent=1, ensure_ascii=False)
+        f.write("\n")
+    return out
+
+
+S2_DELTA_PP = 0.10
+S3_MIN = 38
+FERMION_CLEAN_WER_PCT = 1.72
+
+
+def variant_report(report_dir, dev, p):
+    """Combine wp9s1b_eval_*.json into wp9s1b_report.json/.md (variants vs the fp32 ORT path)."""
+    from stt import phonon2_variants as pv
+    ev = {}
+    for v in ("fp32", "fp16w", "int8", "fp16"):
+        jp = os.path.join(report_dir, "wp9s1b_eval_%s.json" % v)
+        if os.path.isfile(jp):
+            ev[v] = json.load(open(jp, encoding="utf-8"))
+    base = ev["fp32"]
+    base_enc = np.load(os.path.join(report_dir, "wp9s1b_eval_fp32.npz"))
+    rows = {}
+    for v, e in ev.items():
+        folder = os.path.join(p["out_root"], v)
+        enc_bytes = os.path.getsize(os.path.join(folder, "encoder.onnx"))
+        entry = {"encoder_bytes": enc_bytes, "rtf": e["rtf"], "peak_rss_mb": e["peak_rss_mb_40clips"],
+                 "peak_rss_mb_after_wer": e["peak_rss_mb"], "session_create_s": e["session_create_s"],
+                 "encoder_ms_mean": e["encoder_ms_mean"], "encoder_ms_max": e["encoder_ms_max"],
+                 "decoder_joint_us_per_step": e["decoder_joint_us_per_step"],
+                 "op_types_encoder": e["ops"]["encoder.onnx"]["op_types"]}
+        if v != "fp32":
+            s1 = pv.check_s1(folder)
+            entry["s1"] = s1
+            entry["decoder_joint_identical"] = (
+                open(os.path.join(folder, "decoder_joint.onnx"), "rb").read() ==
+                open(os.path.join(p["out_root"], "fp32", "decoder_joint.onnx"), "rb").read())
+            same_seq = same_text = 0
+            diffs, cosm, mism = [], [], []
+            vz = np.load(os.path.join(report_dir, "wp9s1b_eval_%s.npz" % v))
+            for a, b in zip(base["clips"], e["clips"]):
+                assert a["id"] == b["id"]
+                ra, rb = base_enc[a["id"]], vz[b["id"]]
+                diffs.append(float(np.abs(ra - rb).max()))
+                cosm.append(float(((ra * rb).sum(-1) / (np.linalg.norm(ra, axis=-1) * np.linalg.norm(rb, axis=-1))).min()))
+                if a["seq"] == b["seq"] and a["dur"] == b["dur"]:
+                    same_seq += 1
+                if a["text"] == b["text"]:
+                    same_text += 1
+                if a["seq"] != b["seq"] or a["dur"] != b["dur"]:
+                    sa, sb, da, db = a["seq"], b["seq"], a["dur"], b["dur"]
+                    n = min(len(sa), len(sb))
+                    i = next((j for j in range(n) if sa[j] != sb[j] or da[j] != db[j]), n)
+                    mism.append({"id": a["id"], "first_diff_step": i, "text_identical": a["text"] == b["text"]})
+            entry.update(identical_sequences=same_seq, identical_text=same_text, clips=len(base["clips"]),
+                         enc_max_abs_diff=max(diffs), enc_min_cosine=min(cosm), mismatches=mism,
+                         s3=same_text >= S3_MIN)
+        if "wer" in e:
+            entry["wer_pct"] = round(100 * e["wer"]["wer"], 4)
+            entry["wer_detail"] = e["wer"]
+        rows[v] = entry
+    bw = rows["fp32"].get("wer_pct")
+    for v, r in rows.items():
+        if "wer_pct" in r and bw is not None:
+            r["delta_wer_pp"] = round(r["wer_pct"] - bw, 4)
+            if v != "fp32":
+                r["s2"] = r["wer_pct"] <= bw + S2_DELTA_PP
+    if bw is not None:
+        rows["fp32"]["gap_to_fermion_1.72_pp"] = round(bw - FERMION_CLEAN_WER_PCT, 4)
+    rep = {"bar": {"S1": "single encoder.onnx < 2e9 bytes, no external data, checker + C70",
+                   "S2": "corpus WER <= fp32 ORT WER + 0.10 pp on test-clean (2620)",
+                   "S3": "text identical to fp32 ORT on >= 38 of 40 visible clips"},
+           "int8_args": pv.INT8_ARGS, "variants": rows, "versions": versions()}
+    with open(os.path.join(report_dir, "wp9s1b_report.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(rep, f, indent=1)
+        f.write("\n")
+    L = ["# WP9S.1b report: Phonon-2 encoder shipping variants\n",
+         "Bar: " + "; ".join("%s: %s" % kv for kv in rep["bar"].items()) + "\n",
+         "| variant | encoder bytes | S1 | WER % | dWER pp | S2 | text-identical/40 | S3 | RTF | peak RSS MB | notes |",
+         "|---|---|---|---|---|---|---|---|---|---|---|"]
+
+    def yn(x):
+        return "-" if x is None else ("pass" if x else "FAIL")
+    for v, r in rows.items():
+        notes = "enc max abs diff %.3g, min cos %.6f; enc ms mean %s max %s; dj %s us/step; create %s s" % (
+            r.get("enc_max_abs_diff", 0), r.get("enc_min_cosine", 1), r["encoder_ms_mean"], r["encoder_ms_max"],
+            r["decoder_joint_us_per_step"], r["session_create_s"])
+        L.append("| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+            v, r["encoder_bytes"], "n/a (reference)" if v == "fp32" else yn(r["s1"]["s1"]), r.get("wer_pct", "-"),
+            r.get("delta_wer_pp", "-"), yn(r.get("s2")), r.get("identical_text", 40), yn(r.get("s3")),
+            r["rtf"], r["peak_rss_mb"], notes))
+    L.append("\nfp32 gap to Fermion's published 1.72 percent: %s pp\n" % rows["fp32"].get("gap_to_fermion_1.72_pp"))
+    for v, r in rows.items():
+        L.append("## %s encoder ops\n%s\n" % (v, ", ".join("%s x%d" % kv for kv in r["op_types_encoder"].items())))
+        if r.get("mismatches"):
+            L.append("mismatching clips (first differing step): %s\n" % json.dumps(r["mismatches"]))
+    with open(os.path.join(report_dir, "wp9s1b_report.md"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(L) + "\n")
+    return rep
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--make-clips", choices=["visible"], help="write the clip list and exit")
@@ -304,6 +475,9 @@ def main(argv=None):
     ap.add_argument("--report-dir", default=None, help="default <dev>/logs/m9")
     ap.add_argument("--report-name", default="wp9s1a_report")
     ap.add_argument("--no-edge", action="store_true", help="skip the edge checks")
+    ap.add_argument("--wer", action="store_true",
+                    help="WP9S.1b: eval --variant on the 40 clips, then (with --clips all) full test-clean WER")
+    ap.add_argument("--variant-report", action="store_true", help="WP9S.1b: combine wp9s1b_eval_*.json into wp9s1b_report")
     a = ap.parse_args(argv)
 
     from stt import clips as cl
@@ -313,6 +487,15 @@ def main(argv=None):
     if a.make_clips:
         rows, out = cl.make_visible(dev)
         print("wrote %d clips to %s" % (len(rows), out))
+        return 0
+    if a.variant_report:
+        variant_report(a.report_dir or os.path.join(dev, "logs", "m9"), dev, p)
+        return 0
+    if a.wer:
+        warnings.filterwarnings("ignore")
+        vis = os.path.join(dev, "goldens", "stt", "clips_visible.json")
+        eval_variant(a.variant, vis if a.clips in (None, "all") else a.clips, a.clips == "all",
+                     a.report_dir or os.path.join(dev, "logs", "m9"), dev, p)
         return 0
     if not a.clips:
         ap.error("--clips is required (or --make-clips visible)")

@@ -131,3 +131,19 @@ Everything here runs with plain Python (3.11 tested; 3.13 installs, full fetch t
    each image should show; it needs the folders from step 2 via `--models <folder>` and the HF cache via
    `--hf-cache <folder>` (defaults point into the dev folder). `--verify-license` re-reads each licence from Wikimedia
    Commons.
+
+## Speech to text (M9)
+
+Env: `pipelines-stt` (`requirements-stt.txt`; transformers 5.20, not the base env). Code in `stt/`.
+Phonon-2 (CC-BY-4.0 weights, FermionResearch) is a Parakeet-TDT; the container in `<dev>/models/stt/phonon-2/` is expanded to fp32.
+
+1. `python export_phonon2_onnx.py --variant fp32 [--out DIR] [--force]` writes `<dev>/models/stt/phonon-2-onnx/fp32/`:
+   `encoder.onnx` (+ `encoder.onnx.data`, > 2 GB), `decoder_joint.onnx` (one greedy step), tokenizer/config files,
+   `SOURCE.json` (revisions, license, sha256 of every file). A rerun with matching hashes is skipped.
+   Encoder input is only the *valid* mel frames: the feature extractor emits `n_samples // 160 + 1` frames and masks the last one;
+   `encoder.onnx` has no mask input, so pass `input_features[:, :attention_mask.sum()]` (`stt/tdt_greedy.py` and the check do this).
+2. `python check_phonon2_onnx.py --make-clips visible` writes `<dev>/goldens/stt/clips_visible.json` (one LibriSpeech test-clean clip per
+   speaker, duration closest to 8 s).
+3. `python check_phonon2_onnx.py --variant fp32 --clips <dev>/goldens/stt/clips_visible.json` compares ORT with Hugging Face
+   (graph parity, step-for-step greedy TDT loop, edge checks) and writes `<dev>/logs/m9/wp9s1a_report.json` and `.md`.
+Tests: `python -m pytest tests/test_stt_phonon2.py -q` (offline; skips when models/test data are absent).

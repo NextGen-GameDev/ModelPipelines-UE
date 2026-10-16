@@ -137,6 +137,13 @@ Everything here runs with plain Python (3.11 tested; 3.13 installs, full fetch t
 Env: `pipelines-stt` (`requirements-stt.txt`; transformers 5.20, not the base env). Code in `stt/`.
 Phonon-2 (CC-BY-4.0 weights, FermionResearch) is a Parakeet-TDT; the container in `<dev>/models/stt/phonon-2/` is expanded to fp32.
 
+**For users (no dev folder):** `python fetch_phonon2.py --out <dir> [--variant fp16w|fp16|int8|fp32] [--cache <hf cache>] [--keep-fp32]`
+downloads the pinned Phonon-2 revision (`7e153e40...`, 177 MB) and only the config/tokenizer files of the pinned base model
+(`nvidia/parakeet-tdt-0.6b-v3` @ `541d1f99...`, no weights), verifies `SHA256SUMS.txt` and the container hash, unpacks, exports fp32
+and builds the variant (default `fp16w`) into `<dir>/phonon-2-<variant>/` with SOURCE.json, NOTICE, the CC-BY-4.0 text and the
+`modelpipelines.json` sidecar. `<dir>/_work/` (fp32 + container) is deleted unless `--keep-fp32`. Peak disk about 4 GB, peak RAM
+about 6.5 GB (the fp32 export). Re-running with an up-to-date output skips the work. Needs the `pipelines-stt` env.
+
 1. `python export_phonon2_onnx.py --variant fp32 [--out DIR] [--force]` writes `<dev>/models/stt/phonon-2-onnx/fp32/`:
    `encoder.onnx` (+ `encoder.onnx.data`, > 2 GB), `decoder_joint.onnx` (one greedy step), tokenizer/config files,
    `SOURCE.json` (revisions, license, sha256 of every file). A rerun with matching hashes is skipped.

@@ -37,7 +37,24 @@ BASE_COPY = ["tokenizer.json", "tokenizer_config.json", "processor_config.json",
 PHONON_COPY = ["NOTICE", "LICENSE-WEIGHTS-CC-BY-4.0.txt"]
 
 
+_OVERRIDE = {}
+
+
+def set_paths(container, base_dir, phonon_dir, out_root):
+    """WP9S.6c: inject the input paths (user fetch tool). While set, dev_paths() never touches the dev folder.
+    out_root holds the fp32 folder the shipping variants are built from (<out_root>/fp32)."""
+    _OVERRIDE.clear()
+    _OVERRIDE.update({"dev": None, "container": container, "phonon_dir": phonon_dir, "base_dir": base_dir,
+                      "out_root": out_root})
+
+
+def clear_paths():
+    _OVERRIDE.clear()
+
+
 def dev_paths():
+    if _OVERRIDE:
+        return dict(_OVERRIDE)
     dev = _paths.dev_dir()
     return {
         "dev": dev,
@@ -228,7 +245,6 @@ def write_source_json(folder, variant="fp32"):
     import onnxruntime
     import torch
     import transformers
-    p = dev_paths()
     files = {}
     for f in sorted(os.listdir(folder)):
         fp = os.path.join(folder, f)

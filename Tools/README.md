@@ -160,6 +160,14 @@ Phonon-2 (CC-BY-4.0 weights, FermionResearch) is a Parakeet-TDT; the container i
    STFT (`stt/goldens.py`). Run both with `micromamba run -n pipelines-stt python ...`.
 Tests: `python -m pytest tests/test_stt_phonon2.py tests/test_stt_variants.py -q` (offline; skips when models/test data are absent).
 
+Phonon sidecar and speech import cases (WP9S.6t, C78/C78b): every Phonon ONNX folder carries a `modelpipelines.json`
+(`"task": "SpeechToText"` plus the CC-BY-4.0 attribution) so the editor importer needs no manual settings. `stt/phonon2_export.py`
+writes it in `write_source_json` (so all variants get it); for existing folders run
+`python write_phonon2_sidecar.py <dev>/models/stt/phonon-2-onnx/{fp32,fp16w,int8,fp16}` (stdlib only, any env, overwrites).
+`make_import_test_data.py` adds six `stt_*` folders (tiny encoder/decoder graphs from `make_test_models.py`, Phonon's
+`tokenizer.json`) and gives every non-parse-error record `decoder_model_file` and a `speech` block (11 snake_case fields; defaults
+for non-speech tasks). Parse-error records may carry `error_message_contains`; `stt_defaults` is `parse_only`.
+
 Tiny speech-to-text test graphs (WP9S.3t, contract C72c): `make_test_models.py` also builds `tiny_stt_encoder.onnx`,
 `tiny_stt_decoder_joint.onnx` and `tiny_stt_bad_decoder.onnx` (Phonon I/O names at toy sizes; the bad decoder takes a float32
 `token` and is deliberately wrong for C70). `make_test_goldens.py` writes their cases plus a top-level `tiny_stt_greedy` block

@@ -155,18 +155,20 @@ def test_schema_keys(doc):
     assert len(ids) == len(set(ids)) and len(ids) >= 20
     base = {"id", "folder", "reference", "task_override", "expect", "error_codes"}
     full = base | {"warning_codes", "task", "task_source", "model_file", "labels", "preprocess", "license",
-                   "preferred_device", "onnx"}
+                   "preferred_device", "onnx", "decoder_model_file", "speech"}
     pre = {"max_tokens", "add_special_tokens", "pooling", "normalize_embeddings", "image_width", "image_height",
            "resize_mode", "resize_shortest_edge", "resize_width", "resize_height",
            "rescale_factor", "image_mean", "image_std", "score_activation",
            "resample", "nms_iou_threshold", "max_detections"}
     for c in doc["cases"]:
         assert c["expect"] in ("valid", "validation_error", "parse_error")
-        assert set(c) == (base if c["expect"] == "parse_error" else full), c["id"]
+        assert set(c) - {"error_message_contains", "parse_only"} == (
+            base if c["expect"] == "parse_error" else full), c["id"]
         if c["expect"] != "parse_error":
             assert set(c["preprocess"]) == pre
             assert set(c["license"]) == {"spdx_id", "source_url", "attribution"}
             assert set(c["onnx"]) == {"inputs", "outputs"}
+            assert set(c["speech"]) == set(m.SPEECH_DEFAULTS), c["id"]
 
 
 def _root(doc, c):
@@ -186,7 +188,7 @@ def test_valid_tiny_onnx_blocks_match_files(doc):
         path = os.path.join(_root(doc, c), c["folder"], c["model_file"])
         assert m.onnx_block(path) == c["onnx"], c["id"]
         n += 1
-    assert n == 17  # 12 + the 5 WP4.4a cases
+    assert n == 17 + 3  # 12 + the 5 WP4.4a cases + the 3 valid speech cases
 
 
 def test_tiny_models_check_and_run(doc):
@@ -196,6 +198,8 @@ def test_tiny_models_check_and_run(doc):
     for c in doc["cases"]:
         if c["reference"] or c["expect"] == "parse_error" and c["id"] == "missing_model":
             continue
+        if c["id"].startswith("stt_"):
+            continue  # speech folders: see test_stt_cases (encoder/decoder have a fixed batch of 1)
         folder = os.path.join(_root(doc, c), c["folder"])
         mp = os.path.join(folder, "model.onnx")
         if not os.path.isfile(mp):
@@ -588,3 +592,125 @@ def test_c32_cases_hidden_variant(tmp_path):
         d = json.load(f)
     _check_c32_cases(d, "hidden")
     _check_new_keys(d)
+
+
+# ---- WP9S.6t / C78 / C78b speech import cases and the Phonon sidecar ---------------------------------------------------
+
+import write_phonon2_sidecar as sc  # noqa: E402
+
+CONTRACT_SIDECAR = {"task": "SpeechToText", "license": {
+    "spdx_id": "CC-BY-4.0", "source_url": "https://huggingface.co/FermionResearch/Phonon-2",
+    "attribution": "Phonon-2 by Fermion Research (CC-BY-4.0), derived from NVIDIA parakeet-tdt-0.6b-v3 (CC-BY-4.0); "
+                   "converted to ONNX."}}
+
+
+def test_sidecar_bytes_exact():
+    raw = sc.sidecar_bytes().decode("utf-8")
+    assert json.loads(raw) == CONTRACT_SIDECAR
+    assert list(json.loads(raw)) == ["task", "license"]
+    assert list(json.loads(raw)["license"]) == ["spdx_id", "source_url", "attribution"]
+    assert raw.startswith('{\n "task": "SpeechToText",\n "license": {\n  "spdx_id"') and raw.endswith("}\n")
+
+
+def test_write_sidecar_overwrites(tmp_path):
+    (tmp_path / "modelpipelines.json").write_text("old", encoding="utf-8")
+    path = sc.write_sidecar(str(tmp_path))
+    assert json.load(open(path, encoding="utf-8")) == CONTRACT_SIDECAR
+
+
+@pytest.mark.parametrize("variant", ["fp32", "fp16w", "int8", "fp16"])
+def test_phonon_folder_sidecars(variant):
+    folder = os.path.join(_paths.dev_dir(), "models", "stt", "phonon-2-onnx", variant)
+    path = os.path.join(folder, "modelpipelines.json")
+    if not os.path.isdir(folder):
+        pytest.skip("Phonon folder %s not built" % variant)
+    assert os.path.isfile(path), "run write_phonon2_sidecar.py"
+    with open(path, "rb") as f:
+        assert f.read() == sc.sidecar_bytes()
+    with open(path, encoding="utf-8") as f:
+        assert json.load(f) == CONTRACT_SIDECAR
+
+
+def test_speech_settings_defaults_and_mapping():
+    d = m.speech_settings({"architectures": ["ParakeetForTDT"]}, None)
+    assert d == {"sample_rate": 16000, "num_mel_bins": 128, "fft_size": 512, "window_length": 400, "hop_length": 160,
+                 "preemphasis": 0.97, "blank_token_id": 8192, "durations": [0, 1, 2, 3, 4],
+                 "max_symbols_per_step": 10, "subsampling_factor": 8, "silence_threshold_db": -60.0}
+    cfg = {"blank_token_id": 5, "durations": [0, 2], "max_symbols_per_step": 3,
+           "encoder_config": {"subsampling_factor": 4}}
+    pc = {"feature_extractor": {"sampling_rate": 8000, "feature_size": 80, "n_fft": 256, "win_length": 200,
+                                "hop_length": 80, "preemphasis": 1}}
+    d = m.speech_settings(cfg, pc)
+    assert (d["sample_rate"], d["num_mel_bins"], d["fft_size"], d["window_length"], d["hop_length"]) == (
+        8000, 80, 256, 200, 80)
+    assert (d["preemphasis"], d["blank_token_id"], d["durations"], d["max_symbols_per_step"],
+            d["subsampling_factor"]) == (1.0, 5, [0, 2], 3, 4)
+    assert m.SPEECH_DEFAULTS["durations"] == [0, 1, 2, 3, 4]  # defaults are not mutated
+
+
+@pytest.mark.parametrize("cfg,pc,name", [
+    ({}, {"feature_extractor": {"feature_size": "8"}}, "processor_config.json: feature_size"),
+    ({}, {"feature_extractor": {"preemphasis": True}}, "processor_config.json: preemphasis"),
+    ({"blank_token_id": 5.0}, {}, "config.json: blank_token_id"),
+    ({"durations": [0, "1"]}, {}, "config.json: durations"),
+    ({"encoder_config": {"subsampling_factor": "8"}}, {}, "config.json: subsampling_factor")])
+def test_speech_settings_wrong_type(cfg, pc, name):
+    with pytest.raises(m.SpeechJsonError, match=name):
+        m.speech_settings(cfg, pc)
+
+
+def test_detect_task_speech():
+    assert m.detect_task("None", None, False, {"architectures": ["ParakeetForTDT"]}, True) == (
+        "SpeechToText", "architectures")
+    assert m.detect_task("None", {"task": "SpeechToText"}, False, {}, True) == ("SpeechToText", "modelpipelines.json")
+    assert m.detect_task("None", None, False, {"architectures": ["ParakeetForCTC"]}, True) == (None, None)
+    assert m.detect_task("None", None, False, {"architectures": ["parakeetfortdt"]}, True) == (None, None)
+
+
+def test_speech_files(tmp_path):
+    with pytest.raises(ValueError, match="encoder.onnx"):
+        m.speech_files(str(tmp_path))
+    (tmp_path / "model.onnx").write_bytes(b"x")  # never used for this task
+    (tmp_path / "encoder.onnx").write_bytes(b"x")
+    with pytest.raises(ValueError, match="decoder_joint.onnx"):
+        m.speech_files(str(tmp_path))
+    (tmp_path / "decoder_joint.onnx").write_bytes(b"")  # empty counts as missing
+    with pytest.raises(ValueError, match="decoder_joint.onnx"):
+        m.speech_files(str(tmp_path))
+    (tmp_path / "decoder_joint.onnx").write_bytes(b"x")
+    assert m.speech_files(str(tmp_path)) == ("encoder.onnx", "decoder_joint.onnx")
+
+
+def test_stt_cases(doc):
+    by_id = {c["id"]: c for c in doc["cases"]}
+    root = doc.get("import_root", doc["models_root"])
+    tiny = {"sample_rate": 16000, "num_mel_bins": 8, "fft_size": 512, "window_length": 400, "hop_length": 160,
+            "preemphasis": 0.97, "blank_token_id": 5, "durations": [0, 1, 2], "max_symbols_per_step": 10,
+            "subsampling_factor": 8, "silence_threshold_db": -60.0}
+    for case_id, source, spdx in (("stt_tiny_arch", "architectures", "MIT"),
+                                  ("stt_with_model_onnx", "architectures", "MIT"),
+                                  ("stt_tiny_sidecar_task", "modelpipelines.json", "CC-BY-4.0")):
+        c = by_id[case_id]
+        assert c["expect"] == "valid" and c["error_codes"] == [] and c["task"] == "SpeechToText", case_id
+        assert c["task_source"] == source and c["license"]["spdx_id"] == spdx
+        assert (c["model_file"], c["decoder_model_file"]) == ("encoder.onnx", "decoder_joint.onnx")
+        assert c["speech"] == tiny, case_id
+        assert os.path.isfile(os.path.join(root, c["folder"], "tokenizer.json"))
+    assert os.path.isfile(os.path.join(root, by_id["stt_with_model_onnx"]["folder"], "model.onnx"))
+    assert not os.path.isfile(os.path.join(root, by_id["stt_tiny_arch"]["folder"], "model.onnx"))
+    with open(os.path.join(root, "import_test", "stt_tiny_sidecar_task", "config.json"), encoding="utf-8") as f:
+        assert "architectures" not in json.load(f)
+    c = by_id["stt_no_decoder"]
+    assert (c["expect"], c["error_codes"], c["error_message_contains"]) == (
+        "parse_error", ["MissingModelFile"], ["decoder_joint.onnx"])
+    assert not os.path.exists(os.path.join(root, c["folder"], "decoder_joint.onnx"))
+    c = by_id["stt_bad_speech_json"]
+    assert (c["expect"], c["error_codes"], c["error_message_contains"]) == (
+        "parse_error", ["InvalidJson"], ["processor_config.json: feature_size"])
+    c = by_id["stt_defaults"]
+    assert c["parse_only"] is True and c["task"] == "SpeechToText"
+    assert c["speech"] == dict(m.SPEECH_DEFAULTS)
+    assert c["onnx"] == m.onnx_block(os.path.join(root, c["folder"], "encoder.onnx"))
+    for c in doc["cases"]:  # non-speech records carry "" and the defaults
+        if c["expect"] != "parse_error" and c["task"] != "SpeechToText":
+            assert c["decoder_model_file"] == "" and c["speech"] == dict(m.SPEECH_DEFAULTS), c["id"]

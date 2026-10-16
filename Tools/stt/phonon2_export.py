@@ -216,7 +216,14 @@ def check_onnx(folder):
         onnx.checker.check_model(os.path.join(folder, f))   # path form: works with external data
 
 
+def write_sidecar(folder):
+    """C78: modelpipelines.json (task + CC-BY attribution) so the editor importer needs no manual settings."""
+    from write_phonon2_sidecar import write_sidecar as _write
+    return _write(folder)
+
+
 def write_source_json(folder, variant="fp32"):
+    write_sidecar(folder)  # before the file listing so SOURCE.json covers it; every finalised folder passes here
     import onnx
     import onnxruntime
     import torch

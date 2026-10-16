@@ -24,7 +24,7 @@ IR_VERSION = 8
 F32_255 = float(np.float32(1.0 / 255.0))
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
-TASKS = ["TextEmbedding", "TextClassification", "ImageClassification", "ObjectDetection"]
+TASKS = ["TextEmbedding", "TextClassification", "ImageClassification", "ObjectDetection", "SpeechToText"]
 SIGMOID_DETECTION = {"rt_detr", "rt_detr_v2", "d_fine", "deformable_detr", "conditional_detr", "dab_detr"}
 SOFTMAX_DETECTION = {"detr", "yolos", "table-transformer"}
 REFERENCE_SLUGS = ["all-MiniLM-L6-v2", "distilbert-sst2", "resnet-50", "rtdetr_r18vd"]
@@ -381,6 +381,8 @@ def detect_task(task_override, sidecar, has_modules, config, has_tokenizer):
     archs = (config or {}).get("architectures")
     if isinstance(archs, list) and archs and isinstance(archs[0], str):
         a = archs[0]
+        if a == "ParakeetForTDT":
+            return "SpeechToText", "architectures"
         if a.endswith("ForSequenceClassification"):
             return "TextClassification", "architectures"
         if a.endswith("ForImageClassification"):
@@ -390,6 +392,59 @@ def detect_task(task_override, sidecar, has_modules, config, has_tokenizer):
         if a.endswith("Model") and has_tokenizer:
             return "TextEmbedding", "architectures"
     return None, None
+
+
+# C78b: speech settings. JSON keys use the snake_case style of the other expectation fields; the UE names are in the
+# comments. Defaults apply when a key is missing; a key of the wrong JSON type is an InvalidJson error naming
+# "<file>: <key>".
+SPEECH_DEFAULTS = {"sample_rate": 16000, "num_mel_bins": 128, "fft_size": 512, "window_length": 400,
+                   "hop_length": 160, "preemphasis": 0.97, "blank_token_id": 8192, "durations": [0, 1, 2, 3, 4],
+                   "max_symbols_per_step": 10, "subsampling_factor": 8, "silence_threshold_db": -60.0}
+# (settings key, file, path inside the file's JSON, kind)
+SPEECH_SOURCES = [("sample_rate", "processor_config.json", ("feature_extractor", "sampling_rate"), "int"),
+                  ("num_mel_bins", "processor_config.json", ("feature_extractor", "feature_size"), "int"),
+                  ("fft_size", "processor_config.json", ("feature_extractor", "n_fft"), "int"),
+                  ("window_length", "processor_config.json", ("feature_extractor", "win_length"), "int"),
+                  ("hop_length", "processor_config.json", ("feature_extractor", "hop_length"), "int"),
+                  ("preemphasis", "processor_config.json", ("feature_extractor", "preemphasis"), "float"),
+                  ("blank_token_id", "config.json", ("blank_token_id",), "int"),
+                  ("durations", "config.json", ("durations",), "int_list"),
+                  ("max_symbols_per_step", "config.json", ("max_symbols_per_step",), "int"),
+                  ("subsampling_factor", "config.json", ("encoder_config", "subsampling_factor"), "int")]
+
+
+class SpeechJsonError(ValueError):
+    """InvalidJson; str() names "<file>: <key>"."""
+
+
+def speech_settings(config, proc):
+    """C78b rule 3. config / proc are the parsed config.json / processor_config.json dicts (None = file missing)."""
+    out = dict(SPEECH_DEFAULTS)
+    out["durations"] = list(SPEECH_DEFAULTS["durations"])
+    docs = {"config.json": config, "processor_config.json": proc}
+    for key, fname, path, kind in SPEECH_SOURCES:
+        node = docs[fname]
+        for part in path:
+            node = node.get(part) if isinstance(node, dict) else None
+        if node is None:
+            continue
+        ok = ((kind == "int" and _is_int(node)) or
+              (kind == "float" and isinstance(node, (int, float)) and not isinstance(node, bool)) or
+              (kind == "int_list" and isinstance(node, list) and all(_is_int(x) for x in node)))
+        if not ok:
+            raise SpeechJsonError("%s: %s" % (fname, path[-1]))
+        out[key] = float(node) if kind == "float" else node
+    return out
+
+
+def speech_files(folder):
+    """C78b rule 2: (encoder.onnx, decoder_joint.onnx) relative names; raises ValueError('MissingModelFile: <name>')
+    when one is missing or empty. model.onnx is never used."""
+    for name in ("encoder.onnx", "decoder_joint.onnx"):
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            raise ValueError("MissingModelFile: " + name)
+    return "encoder.onnx", "decoder_joint.onnx"
 
 
 def pooling_and_normalize(modules, read_json):
@@ -677,9 +732,11 @@ class Builder:
                 "do_resize": True, "do_rescale": True, "rescale_factor": 0.00392156862745098, "do_normalize": True,
                 "image_mean": p["img_mean"], "image_std": p["img_std"]}
 
-    def add(self, case_id, expect, errors=(), warnings=(), task_override="None"):
+    def add(self, case_id, expect, errors=(), warnings=(), task_override="None", message_contains=None,
+            parse_only=False):
         self.cases.append(dict(id=case_id, expect=expect, errors=list(errors), warnings=list(warnings),
-                               task_override=task_override))
+                               task_override=task_override, message_contains=message_contains,
+                               parse_only=parse_only))
 
     def build_all(self):
         p = self.p
@@ -885,6 +942,85 @@ class Builder:
             self.write(d, "modelpipelines.json", jbytes(full_license(case_id)))
             self.add(case_id, "valid", warnings=image_warnings(body))
 
+        self.build_stt_cases()
+
+    def build_stt_cases(self):
+        """WP9S.6t / C78b: tiny speech folders (tiny graphs from make_test_models.py, Phonon's tokenizer.json)."""
+        models = os.path.join(self.dev, "models")
+        enc = os.path.join(models, "test", "tiny_stt_encoder.onnx")
+        dec = os.path.join(models, "test", "tiny_stt_decoder_joint.onnx")
+        tok = os.path.join(models, "stt", "phonon-2-onnx", "fp16w", "tokenizer.json")
+        for need in (enc, dec, tok):
+            if not os.path.isfile(need):
+                raise SystemExit("NEEDS: %s missing (tiny STT graphs: make_test_models.py; tokenizer: "
+                                 "export_phonon2_onnx.py --variant fp16w)" % need)
+
+        def base(case_id, decoder=True, model_onnx=False):
+            d = self.folder(case_id)
+            shutil.copyfile(enc, os.path.join(d, "encoder.onnx"))
+            if decoder:
+                shutil.copyfile(dec, os.path.join(d, "decoder_joint.onnx"))
+            if model_onnx:
+                shutil.copyfile(enc, os.path.join(d, "model.onnx"))
+            shutil.copyfile(tok, os.path.join(d, "tokenizer.json"))
+            return d
+
+        def config(arch=True):
+            c = {"model_type": "parakeet_tdt", "blank_token_id": 5, "durations": [0, 1, 2],
+                 "max_symbols_per_step": 10, "encoder_config": {"subsampling_factor": 8}}
+            if arch:
+                c = dict(architectures=["ParakeetForTDT"], **c)
+            return c
+
+        def processor():
+            return {"processor_class": "ParakeetProcessor", "feature_extractor": {
+                "feature_extractor_type": "ParakeetFeatureExtractor", "feature_size": 8,
+                "hop_length": 160, "n_fft": 512, "padding_side": "right", "padding_value": 0.0, "preemphasis": 0.97,
+                "return_attention_mask": True, "sampling_rate": 16000, "win_length": 400}}
+
+        def mit(case_id):
+            return {"license": {"spdx_id": "MIT", "source_url": "https://example.invalid/" + case_id,
+                                "attribution": "ModelPipelines test data"}}
+
+        for case_id, model_onnx in (("stt_tiny_arch", False), ("stt_with_model_onnx", True)):
+            d = base(case_id, model_onnx=model_onnx)
+            self.write(d, "config.json", jbytes(config()))
+            self.write(d, "processor_config.json", jbytes(processor()))
+            self.write(d, "modelpipelines.json", jbytes(mit(case_id)))
+            self.add(case_id, "valid")
+
+        d = base("stt_tiny_sidecar_task")
+        self.write(d, "config.json", jbytes(config(arch=False)))
+        self.write(d, "processor_config.json", jbytes(processor()))
+        sc = {"task": "SpeechToText", "license": {
+            "spdx_id": "CC-BY-4.0", "source_url": "https://example.invalid/stt_tiny_sidecar_task",
+            "attribution": "ModelPipelines test data (CC-BY-4.0)"}}
+        self.write(d, "modelpipelines.json", jbytes(sc))
+        self.add("stt_tiny_sidecar_task", "valid")
+
+        d = base("stt_no_decoder", decoder=False)
+        self.write(d, "config.json", jbytes(config()))
+        self.write(d, "processor_config.json", jbytes(processor()))
+        self.write(d, "modelpipelines.json", jbytes(mit("stt_no_decoder")))
+        self.add("stt_no_decoder", "parse_error", errors=["MissingModelFile"], message_contains=["decoder_joint.onnx"])
+
+        d = base("stt_bad_speech_json")
+        self.write(d, "config.json", jbytes(config()))
+        pc = processor()
+        pc["feature_extractor"]["feature_size"] = "8"
+        self.write(d, "processor_config.json", jbytes(pc))
+        self.write(d, "modelpipelines.json", jbytes(mit("stt_bad_speech_json")))
+        self.add("stt_bad_speech_json", "parse_error", errors=["InvalidJson"],
+                 message_contains=["processor_config.json: feature_size"])
+
+        d = base("stt_defaults")
+        self.write(d, "config.json", jbytes({"architectures": ["ParakeetForTDT"], "model_type": "parakeet_tdt"}))
+        self.write(d, "processor_config.json", jbytes({"processor_class": "ParakeetProcessor", "feature_extractor": {
+            "feature_extractor_type": "ParakeetFeatureExtractor"}}))
+        self.write(d, "modelpipelines.json", jbytes(mit("stt_defaults")))
+        # defaults (128 mel bins, blank 8192, ...) do not match the tiny graphs: the validation outcome is not specified
+        self.add("stt_defaults", "validation_error", parse_only=True)
+
 
 # ----------------------------------------------------------------------------------------------------------------
 # Expectations derived from files
@@ -924,10 +1060,16 @@ def derive_full(folder, task_override="None"):
     task, source = detect_task(task_override, sidecar, modules is not None, config, has_tok)
     if task is None:
         raise ValueError("task undetected in " + folder)
-    labels, err = ([], None) if task == "TextEmbedding" else parse_labels((config or {}).get("id2label"))
+    labels, err = ([], None) if task in ("TextEmbedding", "SpeechToText") else parse_labels((config or {}).get("id2label"))
     if err:
         raise ValueError(err)
-    model_file = "model.onnx" if os.path.isfile(os.path.join(folder, "model.onnx")) else "onnx/model.onnx"
+    decoder_file = ""
+    speech = dict(SPEECH_DEFAULTS)
+    if task == "SpeechToText":
+        model_file, decoder_file = speech_files(folder)
+        speech = speech_settings(config, read_json(os.path.join(folder, "processor_config.json")))
+    else:
+        model_file = "model.onnx" if os.path.isfile(os.path.join(folder, "model.onnx")) else "onnx/model.onnx"
     pp = {"max_tokens": 512, "add_special_tokens": True, "pooling": "Mean", "normalize_embeddings": False}
     if task in ("TextEmbedding", "TextClassification"):
         pp["max_tokens"] = text_max_tokens(sbert, tokcfg, config)
@@ -947,15 +1089,37 @@ def derive_full(folder, task_override="None"):
     lic = resolve_license(sidecar, readme_text)
     device = resolve_device(sidecar)
     return {"task": task, "task_source": source, "model_file": model_file, "labels": labels, "preprocess": pp,
-            "license": lic, "preferred_device": device, "onnx": onnx_block(os.path.join(folder, model_file))}
+            "license": lic, "preferred_device": device, "onnx": onnx_block(os.path.join(folder, model_file)),
+            "decoder_model_file": decoder_file, "speech": speech}
 
 
-def case_record(case_id, folder_rel, reference, task_override, expect, errors, warnings, derived):
+def check_stt_parse_error(case, folder):
+    """The two speech parse-error cases must really fail under the C78b rules, with the message named in the case."""
+    if not case["id"].startswith("stt_"):
+        return
+    try:
+        derive_full(folder, case["task_override"])
+    except ValueError as e:  # SpeechJsonError is a ValueError
+        text = str(e)
+    else:
+        raise SystemExit("FAIL: %s was expected to fail to parse" % case["id"])
+    for want in case["message_contains"] or []:
+        if want not in text:
+            raise SystemExit("FAIL: %s error %r lacks %r" % (case["id"], text, want))
+
+
+def case_record(case_id, folder_rel, reference, task_override, expect, errors, warnings, derived,
+                message_contains=None, parse_only=False):
     rec = {"id": case_id, "folder": folder_rel, "reference": reference, "task_override": task_override,
            "expect": expect, "error_codes": errors}
+    if message_contains:  # optional: substrings the error message must contain (WP9S.6t)
+        rec["error_message_contains"] = list(message_contains)
+    if parse_only:  # optional: only the parse stage is specified; the validation outcome is not
+        rec["parse_only"] = True
     if derived is not None:
         rec["warning_codes"] = warnings
-        for k in ("task", "task_source", "model_file", "labels", "preprocess", "license", "preferred_device", "onnx"):
+        for k in ("task", "task_source", "model_file", "labels", "preprocess", "license", "preferred_device", "onnx",
+                  "decoder_model_file", "speech"):
             rec[k] = derived[k]
     return rec
 
@@ -1230,10 +1394,13 @@ def main():
         folder = os.path.join(b.root, c["id"])
         rel = "import_test/" + c["id"]
         if c["expect"] == "parse_error":
-            records.append(case_record(c["id"], rel, False, c["task_override"], c["expect"], c["errors"], [], None))
+            check_stt_parse_error(c, folder)
+            records.append(case_record(c["id"], rel, False, c["task_override"], c["expect"], c["errors"], [], None,
+                                       c["message_contains"]))
         else:
             records.append(case_record(c["id"], rel, False, c["task_override"], c["expect"], c["errors"],
-                                       c["warnings"], derive_full(folder, c["task_override"])))
+                                       c["warnings"], derive_full(folder, c["task_override"]), None,
+                                       c["parse_only"]))
     check_worst_cases(b, records)
     for r in records:
         if r["id"] in C25_CASES:

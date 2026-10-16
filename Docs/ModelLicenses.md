@@ -40,3 +40,13 @@ The classify_jellyfish photo is cropped (56,10 to 1052,1380 of the 1052x1380 ori
 4. Avoid non-commercial licenses (for example CC-BY-NC, and many research weights) in a commercial game.
 5. Check the dataset terms the model card mentions.
 6. Record the license on the package: open the package asset and fill **License** with the SPDX id, the source URL and the attribution text.
+
+## CC-BY-4.0 models such as Phonon-2
+
+The speech model Phonon-2 (Fermion Research, derived from NVIDIA parakeet-tdt-0.6b-v3) is CC-BY-4.0. It is optional and not bundled. CC-BY-4.0 allows commercial use if you give credit. In a shipped game that means:
+
+1. Show the credit in your credits screen or notices file: "Phonon-2 by Fermion Research (CC-BY-4.0), derived from NVIDIA parakeet-tdt-0.6b-v3 (CC-BY-4.0); converted to ONNX."
+2. Link the licence: https://creativecommons.org/licenses/by/4.0/
+3. Say that you changed the model (converted to ONNX).
+
+The validator reports `LicenseNotPermissive` as a Warning for CC-BY-4.0. It means "attribution required". Keep the `NOTICE` file from the model folder with your game. The training data includes CHiME-6 (CC-BY-SA-4.0); the `NOTICE` has the details. This is not legal advice. See [Speech to text](SpeechToText.md#attribution-cc-by-40).

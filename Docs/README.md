@@ -13,6 +13,10 @@ You do not need to know machine learning. You do need to know Blueprints.
 | Image classification | A texture or render target | The best labels for the picture, with scores. | `L_SceneClassifier` |
 | Object detection | A texture or render target | Boxes with a label and a score. | `L_Detection` |
 
+## Speech to text
+
+A fifth task, speech to text, turns a voice clip into text with word times. The model is not bundled. See [Speech to text](SpeechToText.md).
+
 ## Read in this order
 
 1. [Install](Install.md): add the plugin to a project.
@@ -20,8 +24,9 @@ You do not need to know machine learning. You do need to know Blueprints.
 3. [Samples](Samples.md): open and play the four sample maps. Each page also shows the same flow as Blueprint nodes.
 4. [Nodes](Nodes.md): every Blueprint node, pin and result type, plus the C++ calls.
 5. [AI agent tools (MCP)](MCP.md): optional. Let an AI agent import, validate, benchmark and try models in the editor (UE 5.8 only).
-6. [Troubleshooting](Troubleshooting.md): messages you may see and what to do.
-7. [Model licenses](ModelLicenses.md): licenses of the sample models and photos, and advice for your own models.
+6. [Speech to text](SpeechToText.md): optional. Get Phonon-2, convert it, import it and transcribe audio.
+7. [Troubleshooting](Troubleshooting.md): messages you may see and what to do.
+8. [Model licenses](ModelLicenses.md): licenses of the sample models and photos, and advice for your own models.
 
 ## License
 

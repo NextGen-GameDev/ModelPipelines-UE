@@ -188,6 +188,16 @@ If you want to force a task, put a file `modelpipelines.json` next to `model.onn
 
 All keys are optional.
 
+### Speech to text folders
+
+A speech folder has no single `model.onnx`. It needs:
+
+- `encoder.onnx` and `decoder_joint.onnx`.
+- `tokenizer.json`.
+- `modelpipelines.json` with `"task": "SpeechToText"` and the license. The Phonon-2 conversion scripts write it for you.
+
+Audio settings (sample rate, mel bins and so on) are in the package's **Speech** section. See [Speech to text](SpeechToText.md).
+
 ## Edit a package
 
 Double-click a package asset to open it. You can change these fields:

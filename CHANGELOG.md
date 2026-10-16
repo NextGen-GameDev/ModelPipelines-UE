@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Speech to text (fifth task): `USpeechToTextPipeline`, created with `USpeechPipelineLibrary::CreateSpeechToTextPipeline` (Blueprint: **Create Speech To Text Pipeline**).
+- Blueprint nodes **Transcribe Speech** and **Transcribe Sound Wave**, and the C++ calls `Transcribe` and `TranscribeSoundWave`. The result has the text and a start and end time per word (80 ms resolution).
+- Supports Phonon-2 (Fermion Research, English, CC-BY-4.0, not bundled). One script downloads, verifies and converts it (`Tools/fetch_phonon2.py --out <dir>`); shipped variant `fp16w`. 2.16 % word error rate on LibriSpeech test-clean; real-time factor 0.076 on CPU and 0.053 on GPU (RTX 3080 laptop, UE 5.8).
+- Any sample rate from 1000 to 384000 Hz and any channel count. Up to 600 s per call; audio over 35 s is split at quiet points into 25 to 35 s windows.
+- Sound waves (PCM, ADPCM, Bink, Opus) are decoded off the game thread. Silence gate (`SilenceThresholdDb`, -60 dBFS by default).
+- Docs: `Docs/SpeechToText.md`, and speech sections in the import, node, license and troubleshooting pages.
+
+### Known limitations
+
+- English only. About 4 GB of RAM per speech pipeline.
+- No microphone or streaming input. Procedural sound waves are not supported.
+- The decoder always runs on the CPU.
+
 ## [0.1.0] - 2026-10-06
 
 First public release (beta).

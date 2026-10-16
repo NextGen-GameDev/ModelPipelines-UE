@@ -18,6 +18,7 @@ Find these in the Blueprint action menu.
 | **Create Text Classification Pipeline** | Model Pipelines > Text | Text Classification Pipeline |
 | **Create Image Classification Pipeline** | Model Pipelines > Vision | Image Classification Pipeline |
 | **Create Object Detection Pipeline** | Model Pipelines > Vision | Object Detection Pipeline |
+| **Create Speech To Text Pipeline** | Model Pipelines > Speech | Speech To Text Pipeline |
 
 Each one has an input **Package** and two outputs: the pipeline and **Result** (see below). These nodes have an exec pin (they are not pure), so wire the white exec line through them.
 
@@ -81,6 +82,22 @@ Only detections with a score above **Score Threshold** are returned. The value i
 A NaN threshold, an unsupported image or an empty pipeline ends in **On Failure**.
 
 Example: On Success, **For Each Loop** over `Detections`. Use each **Box** to draw a rectangle on a HUD.
+
+#### Transcribe Speech
+
+Category **Model Pipelines > Speech**. Setup is in [Speech to text](SpeechToText.md).
+
+- Inputs: **Pipeline** (Speech To Text Pipeline), **Samples** (array of floats, interleaved), **Sample Rate** (default 16000), **Num Channels** (default 1).
+- **On Success** and **On Failure** both carry **Result** and **Transcript**. **Transcript** has **Text**, **Words** (each with **Word**, **Start Seconds**, **End Seconds**), **Audio Seconds** and **Inference Ms**. It is empty on failure.
+- Sample rate: 1000 to 384000 Hz. Any channel count. Up to 600 s per call; audio over 35 s is split into windows.
+
+#### Transcribe Sound Wave
+
+Category **Model Pipelines > Speech**.
+
+- Inputs: **Pipeline** (Speech To Text Pipeline), **Sound** (Sound Wave).
+- Outputs: the same as **Transcribe Speech**.
+- The audio is decoded in the background. Procedural sound waves are not supported. A null pipeline or sound, or audio that cannot be decoded, ends in **On Failure**.
 
 #### World context
 

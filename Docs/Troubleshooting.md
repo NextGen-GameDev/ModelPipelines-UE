@@ -72,6 +72,22 @@ A package that is only reached by a path string (for example `/Game/Models/resne
 - Add `/Game/Models` to **Project Settings > Packaging > Additional Asset Directories to Cook**.
 - Or use a hard reference to the package, for example a variable of type **Pipeline Model Package** set in the editor.
 
+## Speech to text
+
+**Out of memory when creating the speech pipeline.** One pipeline needs about 4 GB of RAM. Create one and share it. Do not create one per call.
+
+**The transcript is empty.** The clip is quieter than `SilenceThresholdDb` (-60 dBFS by default), so the model did not run (**Inference Ms** is 0). Raise the volume, or set `SilenceThresholdDb` to -100 to turn the gate off.
+
+**The call fails with "at most 600 s per call".** Cut the audio into pieces of 600 s or less.
+
+**Transcribe Sound Wave fails.** Procedural sound waves are not supported. Use an imported sound wave.
+
+**The first GPU call takes about 4 s.** DirectML warms up once. Later calls are faster.
+
+**`LicenseNotPermissive` warning on import.** Expected for Phonon-2. It means attribution is required. See [Model licenses](ModelLicenses.md#cc-by-40-models-such-as-phonon-2).
+
+**The import reports the wrong task or missing files.** A speech folder needs `encoder.onnx`, `decoder_joint.onnx`, `tokenizer.json` and `modelpipelines.json`. See [Get and import models](ImportModel.md#speech-to-text-folders).
+
 ## Still stuck
 
 Open an issue: https://github.com/NextGen-GameDev/ModelPipelines-UE/issues. Include the Output Log and the report text.

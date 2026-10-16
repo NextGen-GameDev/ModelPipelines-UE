@@ -142,6 +142,18 @@ Attribution: each model is by the authors named on its Hugging Face model card (
 
 Revisions are the full Hugging Face commit hashes the fetch script downloads (the script pins their first eight characters).
 
+## Phonon-2 (optional user-downloaded model)
+
+The plugin does **not** ship Phonon-2. You download it and convert it with `Tools/` (see [Docs/SpeechToText.md](Docs/SpeechToText.md)). If your game includes the converted files, you must reproduce this attribution:
+
+- Model: Phonon-2, Copyright 2026 Fermion Research. Source: https://huggingface.co/FermionResearch/Phonon-2
+- SPDX: CC-BY-4.0, https://creativecommons.org/licenses/by/4.0/
+- Derived from NVIDIA Parakeet TDT 0.6B v3 (nvidia/parakeet-tdt-0.6b-v3), (c) NVIDIA Corporation, CC-BY-4.0: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+- Changes: converted to ONNX (the `fp16w` variant also stores weights as 16-bit numbers). Fermion's own changes to the base model are described in the `NOTICE` file that comes with the model.
+- Training data includes CHiME-6 (CC-BY-SA-4.0, https://chimechallenge.github.io/chime6/) and SPGISpeech (Kensho's public terms, https://datasets.kensho.com/datasets/spgispeech).
+
+Keep the model's `NOTICE` and `LICENSE-WEIGHTS-CC-BY-4.0.txt` files with your game.
+
 ## Sample photos
 
 The six photos in `Content/Samples/Textures` are CC0 1.0 (SPDX `CC0-1.0`) or public domain, from Wikimedia Commons. CC0 needs no attribution. We list the authors anyway.

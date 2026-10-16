@@ -11,6 +11,7 @@ public class ModelPipelinesEditor : ModuleRules
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "ModelPipelinesCore" });
 		PrivateDependencyModuleNames.AddRange(new string[] {
 			"UnrealEd", "NNE", "ModelPipelinesTokenizer", "Json", "AssetRegistry", "AssetTools", "ToolMenus",
-			"ContentBrowser", "DesktopPlatform", "Slate", "SlateCore", "Projects", "DeveloperToolSettings" });
+			"ContentBrowser", "DesktopPlatform", "Slate", "SlateCore", "Projects", "DeveloperToolSettings",
+			"ModelPipelinesSpeech" });   // WP9S.6a: speech import tests create a USpeechToTextPipeline
 	}
 }

@@ -141,6 +141,23 @@ namespace PipelineModelValidatorPrivate
 					return false;
 				}
 			}
+			else if (Index == B.InputFeatures)
+			{
+				// SpeechToText encoder (C78): 200 zero feature frames of NumMelBins.
+				const int64 Mel = Package.Speech.NumMelBins;
+				if (Mel <= 0 || Mel > 4096)
+				{
+					OutError = FString::Printf(TEXT("NumMelBins %lld is invalid"), Mel);
+					return false;
+				}
+				const int64 Shape[] = { 1, 200, Mel };
+				Tensor = FPipelineTensor::Zeros(EPipelineTensorType::Float32, Shape);
+				if (!Tensor.IsValid())
+				{
+					OutError = FString::Printf(TEXT("could not build the smoke-run tensor for input %s with shape %s"), *Desc.Name, *DescribeShape(Shape));
+					return false;
+				}
+			}
 			else
 			{
 				OutError = FString::Printf(TEXT("model input %s is not fed by the task"), *Desc.Name);
@@ -271,6 +288,21 @@ namespace PipelineModelValidatorPrivate
 			}
 			break;
 		}
+		case EPipelineTask::SpeechToText:
+		{
+			// encoder_projected [1, F, D], F >= 1 (C78).
+			const int64 Expected[] = { 1, -1, -1 };
+			if (!CheckShape(Main, *MainName, Expected, OutError))
+			{
+				return false;
+			}
+			if (Main.GetShape()[1] < 1 || Main.GetShape()[2] < 1)
+			{
+				OutError = FString::Printf(TEXT("output %s has shape %s, at least one frame of at least one value expected"), *MainName, *DescribeShape(Main.GetShape()));
+				return false;
+			}
+			break;
+		}
 		default:
 			OutError = FString::Printf(TEXT("task %s has no smoke-run check"), LexToString(Package.Task));
 			return false;
@@ -289,7 +321,7 @@ namespace PipelineModelValidatorPrivate
 	};
 
 	static FSmokeOutcome RunSmoke(const TSharedPtr<IPipelineModel>& Model, const UPipelineModelPackage& Package,
-		const FPipelineTaskBindings& B, TConstArrayView<int32> Ids)
+		const FPipelineTaskBindings& B, TConstArrayView<int32> Ids, TArray<FPipelineTensor>* OutOutputs = nullptr)
 	{
 		FSmokeOutcome Out;
 		const TArray<FPipelineTensorDesc> InputDescs = Model->GetInputDescs();
@@ -323,7 +355,145 @@ namespace PipelineModelValidatorPrivate
 			return Out;
 		}
 		Out.bRan = true;
+		if (OutOutputs)
+		{
+			*OutOutputs = MoveTemp(Outputs);
+		}
 		return Out;
+	}
+
+	/**
+	 * SpeechToText decoder_joint check (C78), always on CPU: create, resolve its I/O, and (with an encoder smoke output)
+	 * one decoder step with the first encoder frame, the blank token and zero states.
+	 */
+	static void ValidateSpeechDecoder(const UPipelineModelPackage& Package, IPipelineBackend& Backend, int32 EncoderDim,
+		const FPipelineTensor* EncoderOut, FPipelineValidationReport& Report)
+	{
+		UNNEModelData* const DecoderData = Package.DecoderModel.Get();
+		if (DecoderData == nullptr)
+		{
+			if (!Report.HasError(ECode::NoDecoderModel))
+			{
+				Report.Add(ESev::Error, ECode::NoDecoderModel, TEXT("DecoderModel is empty; a SpeechToText package needs the decoder_joint model. Re-import the model folder."));
+			}
+			return;
+		}
+		FPipelineResult PrepareResult;
+		TSharedPtr<IPipelineModel> Decoder = Backend.PrepareModel(DecoderData, EPipelineDevice::CPU, PrepareResult);
+		const FPipelineResult InitResult = Decoder.IsValid() ? Decoder->Initialize() : PrepareResult;
+		if (!Decoder.IsValid() || !InitResult.bSuccess)
+		{
+			const FString Reason = InitResult.Message.IsEmpty() ? FString(TEXT("the model could not be created")) : InitResult.Message;
+			Report.Add(ESev::Error, ECode::ModelCreateFailed, FString::Printf(
+				TEXT("DecoderModel: %s. Re-export decoder_joint.onnx and re-import the model folder."), *Reason));
+			return;
+		}
+		const TArray<FPipelineTensorDesc> InputDescs = Decoder->GetInputDescs();
+		const TArray<FPipelineTensorDesc> OutputDescs = Decoder->GetOutputDescs();
+		FPipelineSpeechDecoderBindings DB;
+		if (!ResolveSpeechDecoderIO(Package.Speech, EncoderDim, InputDescs, OutputDescs, DB, Report))
+		{
+			return;
+		}
+		if (EncoderOut == nullptr)
+		{
+			return;
+		}
+
+		const TConstArrayView<int64> EncShape = EncoderOut->GetShape();
+		const TConstArrayView64<float> EncData = EncoderOut->GetFloatData();
+		const int64 D = EncShape.Num() == 3 ? EncShape[2] : 0;
+		if (D <= 0 || EncData.Num() < D)
+		{
+			Report.Add(ESev::Error, ECode::SmokeOutputInvalid, TEXT("decoder: no encoder frame to feed (the encoder output is empty)."));
+			return;
+		}
+		// Smoke-run tensors are bounded like the Mel guard: a corrupt or hostile decoder signature must not allocate gigabytes.
+		constexpr int64 MaxSmokeElements = 16 * 1024 * 1024;
+		if (D > MaxSmokeElements)
+		{
+			Report.Add(ESev::Error, ECode::SmokeRunFailed, FString::Printf(
+				TEXT("decoder: encoder frame of %lld elements is too large for the smoke run (limit %lld). Check the encoder output's last dimension and re-export the model."),
+				D, MaxSmokeElements));
+			return;
+		}
+		TArray<FPipelineTensor> Inputs;
+		for (int32 Index = 0; Index < InputDescs.Num(); ++Index)
+		{
+			const FPipelineTensorDesc& Desc = InputDescs[Index];
+			FPipelineTensor Tensor;
+			if (Index == DB.EncoderFrame)
+			{
+				const int64 Shape[] = { 1, D };
+				Tensor = FPipelineTensor::FromFloat(Shape, TConstArrayView<float>(EncData.GetData(), static_cast<int32>(D)));
+			}
+			else if (Index == DB.Token)
+			{
+				const int64 Shape[] = { 1 };
+				const int64 Values[] = { static_cast<int64>(Package.Speech.BlankTokenId) };
+				Tensor = FPipelineTensor::FromInt64(Shape, Values);
+			}
+			else if (Index == DB.StateH || Index == DB.StateC)
+			{
+				TArray<int64> Shape = Desc.Shape;
+				int64 Elements = 1;
+				for (int64& Dim : Shape)
+				{
+					Dim = Dim < 1 ? 1 : Dim;
+					// Elements <= MaxSmokeElements before the multiply, so the check below cannot overflow.
+					Elements = Dim > MaxSmokeElements / Elements ? MaxSmokeElements + 1 : Elements * Dim;
+				}
+				if (Elements > MaxSmokeElements)
+				{
+					Report.Add(ESev::Error, ECode::SmokeRunFailed, FString::Printf(
+						TEXT("decoder: state %s is too large for the smoke run (more than %lld elements). Check its shape in decoder_joint.onnx and re-export the model."),
+						*Desc.Name, MaxSmokeElements));
+					return;
+				}
+				Tensor = FPipelineTensor::Zeros(EPipelineTensorType::Float32, Shape);
+			}
+			else
+			{
+				Report.Add(ESev::Error, ECode::SmokeRunFailed, FString::Printf(TEXT("decoder: model input %s is not fed by the task."), *Desc.Name));
+				return;
+			}
+			if (!Tensor.IsValid())
+			{
+				Report.Add(ESev::Error, ECode::SmokeRunFailed, FString::Printf(TEXT("decoder: could not build the smoke-run tensor for input %s."), *Desc.Name));
+				return;
+			}
+			Inputs.Add(MoveTemp(Tensor));
+		}
+		TArray<FPipelineTensor> Outputs;
+		const FPipelineResult Result = FPipelineExecutor::Get().RunBlocking(Decoder, Inputs, Outputs);
+		if (!Result.bSuccess)
+		{
+			Report.Add(ESev::Error, ECode::SmokeRunFailed, FString::Printf(TEXT("decoder: smoke run failed: %s"),
+				Result.Message.IsEmpty() ? TEXT("the run failed") : *Result.Message));
+			return;
+		}
+		FString Error;
+		bool bOk = Outputs.Num() == OutputDescs.Num() && Outputs.IsValidIndex(DB.TokenLogits) && Outputs.IsValidIndex(DB.DurationLogits);
+		if (!bOk)
+		{
+			Error = FString::Printf(TEXT("the run returned %d outputs, the model declares %d"), Outputs.Num(), OutputDescs.Num());
+		}
+		else
+		{
+			const int64 ExpectedTokens[] = { 1, static_cast<int64>(Package.Speech.BlankTokenId) + 1 };
+			const int64 ExpectedDurations[] = { 1, static_cast<int64>(Package.Speech.Durations.Num()) };
+			const FString TokName = OutputDescs[DB.TokenLogits].Name;
+			const FString DurName = OutputDescs[DB.DurationLogits].Name;
+			bOk = CheckShape(Outputs[DB.TokenLogits], *TokName, ExpectedTokens, Error)
+				&& CheckFinite(Outputs[DB.TokenLogits], *TokName, Error)
+				&& CheckShape(Outputs[DB.DurationLogits], *DurName, ExpectedDurations, Error)
+				&& CheckFinite(Outputs[DB.DurationLogits], *DurName, Error);
+		}
+		if (!bOk)
+		{
+			Report.Add(ESev::Error, ECode::SmokeOutputInvalid, FString::Printf(
+				TEXT("decoder: smoke run output invalid: %s. Check BlankTokenId and Durations against the decoder_joint model."), *Error));
+		}
 	}
 
 	static FPipelineDeviceCheck& AddCheck(FPipelineValidationReport& Report, EPipelineDevice Device, bool bAvailable)
@@ -502,7 +672,7 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 	TArray<int32> Ids;
 	// Kept alive for the worst-case run in step 5 (text tasks only).
 	TStrongObjectPtr<UPipelineTokenizer> Tokenizer;
-	if (IsTextTask(Task))
+	if (IsTextTask(Task) || Task == EPipelineTask::SpeechToText)
 	{
 		Tokenizer.Reset(NewObject<UPipelineTokenizer>(GetTransientPackage()));
 		if (!Tokenizer.IsValid() || !Tokenizer->InitializeTokenizerFromJson(Package->TokenizerJson))
@@ -581,7 +751,11 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 	const TArray<FPipelineTensorDesc> InputDescs = CpuModel->GetInputDescs();
 	const TArray<FPipelineTensorDesc> OutputDescs = CpuModel->GetOutputDescs();
 	FPipelineTaskBindings Bindings;
-	if (!ResolvePipelineTaskIO(Task, Package->Preprocess, Package->Postprocess, Package->Labels.Num(), InputDescs, OutputDescs, Bindings, Report))
+	const bool bSpeech = Task == EPipelineTask::SpeechToText;
+	const bool bTaskIoOk = bSpeech
+		? ResolvePipelineTaskIO(Task, Package->Preprocess, Package->Postprocess, Package->Speech, Package->Labels.Num(), InputDescs, OutputDescs, Bindings, Report)
+		: ResolvePipelineTaskIO(Task, Package->Preprocess, Package->Postprocess, Package->Labels.Num(), InputDescs, OutputDescs, Bindings, Report);
+	if (!bTaskIoOk)
 	{
 		Report.DeviceChecks[CpuIndex].Message = TEXT("CPU: smoke run skipped (the model's inputs/outputs do not fit the task)");
 		return Report;
@@ -592,9 +766,12 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 	{
 		Report.DeviceChecks[CpuIndex].Message = FString::Printf(TEXT("CPU: %s"), SmokeSkippedInvalidMaxTokens);
 	}
+	TArray<FPipelineTensor> CpuOutputs;
+	bool bCpuSmokeRan = false;
 	if (bRunSmoke)
 	{
-		const FSmokeOutcome Smoke = RunSmoke(CpuModel, *Package, Bindings, Ids);
+		const FSmokeOutcome Smoke = RunSmoke(CpuModel, *Package, Bindings, Ids, bSpeech ? &CpuOutputs : nullptr);
+		bCpuSmokeRan = Smoke.bRan;
 		FPipelineDeviceCheck& Cpu = Report.DeviceChecks[CpuIndex];
 		Cpu.bRan = Smoke.bRan;
 		Cpu.InferenceMs = Smoke.InferenceMs;
@@ -645,6 +822,24 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 		}
 	}
 	CpuModel.Reset();
+
+	// Step 5b: SpeechToText decoder_joint, always on CPU (C78).
+	if (bSpeech)
+	{
+		int32 EncoderDim = 0;
+		if (OutputDescs.IsValidIndex(Bindings.MainOutput) && OutputDescs[Bindings.MainOutput].Shape.Num() == 3
+			&& OutputDescs[Bindings.MainOutput].Shape[2] > 0)
+		{
+			EncoderDim = static_cast<int32>(OutputDescs[Bindings.MainOutput].Shape[2]);
+		}
+		const FPipelineTensor* EncoderOut = bCpuSmokeRan && CpuOutputs.IsValidIndex(Bindings.MainOutput) ? &CpuOutputs[Bindings.MainOutput] : nullptr;
+		if (EncoderDim <= 0 && EncoderOut && EncoderOut->GetShape().Num() == 3)
+		{
+			EncoderDim = static_cast<int32>(EncoderOut->GetShape()[2]);
+		}
+		ValidateSpeechDecoder(*Package, Backend, EncoderDim, EncoderOut, Report);
+		CpuOutputs.Empty();
+	}
 
 	// Step 6: GPU.
 	if (Options.bCheckGpu)

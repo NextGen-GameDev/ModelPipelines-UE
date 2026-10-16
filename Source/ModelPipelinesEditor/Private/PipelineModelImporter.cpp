@@ -40,10 +40,13 @@ namespace PipelineModelImporterPrivate
 	}
 
 	/** Copies every field of the folder info into a package (Model is set separately). */
-	static void FillPackage(UPipelineModelPackage* Pkg, const FPipelineModelFolderInfo& Info, EPipelineDevice OptionsDevice, UNNEModelData* Model)
+	static void FillPackage(UPipelineModelPackage* Pkg, const FPipelineModelFolderInfo& Info, EPipelineDevice OptionsDevice, UNNEModelData* Model,
+		UNNEModelData* DecoderModel)
 	{
 		Pkg->Task = Info.Task;
 		Pkg->Model = Model;
+		Pkg->DecoderModel = DecoderModel;
+		Pkg->Speech = Info.Speech;
 		Pkg->TokenizerJson = Info.TokenizerJson;
 		Pkg->Labels = Info.Labels;
 		Pkg->Preprocess = Info.Preprocess;
@@ -175,12 +178,23 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 	// strings. Only string operations happen before this check.
 	FTarget PkgTarget = MakeTarget(Dest, Name);
 	FTarget ModelTarget = MakeTarget(Dest, Name + TEXT("_Model"));
-	if (PkgTarget.LongPackageName.Len() > MaxLongPackageNameLen || ModelTarget.LongPackageName.Len() > MaxLongPackageNameLen)
+	// SpeechToText (C78): a third asset <Name>_Decoder with decoder_joint.onnx.
+	const bool bSpeech = Info.Task == EPipelineTask::SpeechToText;
+	FTarget DecoderTarget = MakeTarget(Dest, Name + TEXT("_Decoder"));
+	TArray<FTarget*> Targets = {&PkgTarget, &ModelTarget};
+	if (bSpeech)
 	{
-		Report.Add(ESev::Error, ECode::InvalidDestination, FString::Printf(
-			TEXT("The asset path '%s...' is too long (%d characters; the limit is %d for '<DestinationPath>/<AssetName>_Model'). Use a shorter DestinationPath or AssetName."),
-			*ModelTarget.LongPackageName.Left(64), ModelTarget.LongPackageName.Len(), MaxLongPackageNameLen));
-		return Finish();
+		Targets.Add(&DecoderTarget);
+	}
+	for (const FTarget* T : Targets)
+	{
+		if (T->LongPackageName.Len() > MaxLongPackageNameLen)
+		{
+			Report.Add(ESev::Error, ECode::InvalidDestination, FString::Printf(
+				TEXT("The asset path '%s...' is too long (%d characters; the limit is %d for '<DestinationPath>/<AssetName>_Model'/'_Decoder'). Use a shorter DestinationPath or AssetName."),
+				*T->LongPackageName.Left(64), T->LongPackageName.Len(), MaxLongPackageNameLen));
+			return Finish();
+		}
 	}
 	if (!Options.AssetName.IsEmpty())
 	{
@@ -201,7 +215,7 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 		}
 	}
 	bool bDestOk = true;
-	for (const FTarget* T : {&PkgTarget, &ModelTarget})
+	for (const FTarget* T : Targets)
 	{
 		FText Reason;
 		if (!FPackageName::IsValidLongPackageName(T->LongPackageName, false, &Reason))
@@ -218,7 +232,7 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 	}
 
 	// Existing assets: loaded objects or packages on disk.
-	for (FTarget* T : {&PkgTarget, &ModelTarget})
+	for (FTarget* T : Targets)
 	{
 		T->Loaded = FindObject<UObject>(nullptr, *T->ObjectPath);
 		T->bOnDisk = FPackageName::DoesPackageExist(T->LongPackageName);
@@ -226,7 +240,7 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 	// A package that is garbage (pending GC) would be handed back by CreatePackage; never reuse it.
 	{
 		bool bPendingGc = false;
-		for (const FTarget* T : {&PkgTarget, &ModelTarget})
+		for (const FTarget* T : Targets)
 		{
 			UPackage* Found = FindPackage(nullptr, *T->LongPackageName);
 			if (Found && !IsValid(Found))
@@ -244,9 +258,10 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 	}
 	UPipelineModelPackage* ExistingPkg = nullptr;
 	UNNEModelData* ExistingModel = nullptr;
-	if (PkgTarget.Exists() || ModelTarget.Exists())
+	UNNEModelData* ExistingDecoder = nullptr;
+	if (PkgTarget.Exists() || ModelTarget.Exists() || (bSpeech && DecoderTarget.Exists()))
 	{
-		bool bCanOverwrite = Options.bOverwriteExisting && PkgTarget.Exists() && ModelTarget.Exists();
+		bool bCanOverwrite = Options.bOverwriteExisting && PkgTarget.Exists() && ModelTarget.Exists() && (!bSpeech || DecoderTarget.Exists());
 		if (bCanOverwrite)
 		{
 			UObject* PkgObj = PkgTarget.Loaded ? PkgTarget.Loaded : LoadObject<UObject>(nullptr, *PkgTarget.ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
@@ -254,21 +269,43 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 			ExistingPkg = Cast<UPipelineModelPackage>(PkgObj);
 			ExistingModel = Cast<UNNEModelData>(ModelObj);
 			bCanOverwrite = IsValid(ExistingPkg) && IsValid(ExistingModel);
+			if (bSpeech && bCanOverwrite)
+			{
+				UObject* DecObj = DecoderTarget.Loaded ? DecoderTarget.Loaded : LoadObject<UObject>(nullptr, *DecoderTarget.ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+				ExistingDecoder = Cast<UNNEModelData>(DecObj);
+				bCanOverwrite = IsValid(ExistingDecoder);
+			}
 		}
 		if (!bCanOverwrite)
 		{
-			for (const FTarget* T : {&PkgTarget, &ModelTarget})
+			ExistingPkg = nullptr;
+			ExistingModel = nullptr;
+			ExistingDecoder = nullptr;
+			for (const FTarget* T : Targets)
 			{
 				if (T->Exists())
 				{
 					Report.Add(ESev::Error, ECode::AssetExists, Options.bOverwriteExisting
-						? FString::Printf(TEXT("'%s' exists and cannot be overwritten: overwrite needs both '%s' (UPipelineModelPackage) and '%s' (UNNEModelData) to exist with those classes. Choose another AssetName or DestinationPath."),
-							*T->ObjectPath, *PkgTarget.ObjectPath, *ModelTarget.ObjectPath)
+						? FString::Printf(TEXT("'%s' exists and cannot be overwritten: overwrite needs '%s' (UPipelineModelPackage) and '%s'%s (UNNEModelData) to exist with those classes. Choose another AssetName or DestinationPath."),
+							*T->ObjectPath, *PkgTarget.ObjectPath, *ModelTarget.ObjectPath,
+							bSpeech ? *FString::Printf(TEXT(" and '%s'"), *DecoderTarget.ObjectPath) : TEXT(""))
 						: FString::Printf(TEXT("'%s' already exists. Set bOverwriteExisting to update it in place, or choose another AssetName or DestinationPath."),
 							*T->ObjectPath));
 				}
 			}
 			return Finish();
+		}
+	}
+	// A non-speech overwrite over a former SpeechToText import: <Name>_Decoder is no longer referenced. Never deleted.
+	if (!bSpeech && ExistingPkg)
+	{
+		const bool bStaleDecoder = FindObject<UObject>(nullptr, *DecoderTarget.ObjectPath) != nullptr
+			|| FPackageName::DoesPackageExist(DecoderTarget.LongPackageName);
+		if (bStaleDecoder)
+		{
+			Report.Add(ESev::Warning, ECode::AssetExists, FString::Printf(
+				TEXT("'%s' is left over from an earlier SpeechToText import and is no longer used by '%s' (task %s needs one model). It was not deleted; delete it in the Content Browser if you no longer need it."),
+				*DecoderTarget.ObjectPath, *PkgTarget.ObjectPath, *UEnum::GetValueAsString(Info.Task)));
 		}
 	}
 
@@ -281,13 +318,30 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 			TEXT("Could not read the model file '%s' (missing, empty or unreadable). Check the file and its permissions."), *Info.ModelFile));
 		return Finish();
 	}
+	TArray64<uint8> DecoderBytes;
+	if (bSpeech && (Info.DecoderModelFile.IsEmpty() || !FFileHelper::LoadFileToArray(DecoderBytes, *Info.DecoderModelFile) || DecoderBytes.Num() == 0))
+	{
+		Report.Add(ESev::Error, ECode::MissingModelFile, FString::Printf(
+			TEXT("Could not read the decoder model file '%s' (missing, empty or unreadable). Check the file and its permissions."), *Info.DecoderModelFile));
+		return Finish();
+	}
 
-	// 4. Build both objects in the transient package.
+	// 4. Build the objects in the transient package.
 	SlowTask.EnterProgressFrame(1.f, LOCTEXT("Building", "Building the model package"));
 	TStrongObjectPtr<UNNEModelData> TempModel(NewObject<UNNEModelData>(GetTransientPackage(), NAME_None, RF_Transient));
 	TempModel->Init(TEXT("onnx"), Bytes);
+	TStrongObjectPtr<UNNEModelData> TempDecoder;
+	if (bSpeech)
+	{
+		TempDecoder.Reset(NewObject<UNNEModelData>(GetTransientPackage(), NAME_None, RF_Transient));
+		TempDecoder->Init(TEXT("onnx"), DecoderBytes);
+	}
+	// The bytes now live in the model data (the encoder can be ~1.2 GB): drop the file copies on both paths. An overwrite
+	// initialises the existing assets from the temp models' data views, so the peak stays at two copies.
+	Bytes.Empty();
+	DecoderBytes.Empty();
 	TStrongObjectPtr<UPipelineModelPackage> TempPkg(NewObject<UPipelineModelPackage>(GetTransientPackage(), NAME_None, RF_Transient));
-	FillPackage(TempPkg.Get(), Info, Options.PreferredDevice, TempModel.Get());
+	FillPackage(TempPkg.Get(), Info, Options.PreferredDevice, TempModel.Get(), TempDecoder.Get());
 
 	// 5. Settings always; full validation when asked. The validator starts with ValidateSettings itself, so its report
 	// replaces the settings-only one (no duplicated messages).
@@ -304,6 +358,7 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 	{
 		DropTransient(TempPkg.Get());
 		DropTransient(TempModel.Get());
+		DropTransient(TempDecoder.Get());
 		return Finish();
 	}
 
@@ -311,32 +366,59 @@ FPipelineImportResult ImportPipelineModelFolder(const FPipelineImportOptions& Op
 	SlowTask.EnterProgressFrame(1.f, LOCTEXT("Creating", "Creating the assets"));
 	UPipelineModelPackage* FinalPkg = nullptr;
 	UNNEModelData* FinalModel = nullptr;
+	UNNEModelData* FinalDecoder = nullptr;
 	if (ExistingPkg && ExistingModel)
 	{
-		ExistingModel->Init(TEXT("onnx"), Bytes);
-		FillPackage(ExistingPkg, Info, Options.PreferredDevice, ExistingModel);
-		ExistingModel->MarkPackageDirty();
-		ExistingPkg->MarkPackageDirty();
 		DropTransient(TempPkg.Get());
+		// One model at a time: copy from the temp's view, then free the temp's buffer before the next copy.
+		ExistingModel->Init(TEXT("onnx"), TempModel->GetFileData());
+		ExistingModel->MarkPackageDirty();
+		TempModel->ClearFileDataAndFileType();
 		DropTransient(TempModel.Get());
+		TempModel.Reset();
+		if (ExistingDecoder && TempDecoder)
+		{
+			ExistingDecoder->Init(TEXT("onnx"), TempDecoder->GetFileData());
+			ExistingDecoder->MarkPackageDirty();
+		}
+		if (TempDecoder)
+		{
+			TempDecoder->ClearFileDataAndFileType();
+		}
+		DropTransient(TempDecoder.Get());
+		TempDecoder.Reset();
+		FillPackage(ExistingPkg, Info, Options.PreferredDevice, ExistingModel, bSpeech ? ExistingDecoder : nullptr);
+		ExistingPkg->MarkPackageDirty();
 		FinalPkg = ExistingPkg;
 		FinalModel = ExistingModel;
+		FinalDecoder = bSpeech ? ExistingDecoder : nullptr;
 	}
 	else
 	{
 		FinalModel = TempModel.Get();
+		FinalDecoder = TempDecoder.Get();
 		FinalPkg = TempPkg.Get();
 		MoveIntoPackage(FinalModel, ModelTarget);
+		if (FinalDecoder)
+		{
+			MoveIntoPackage(FinalDecoder, DecoderTarget);
+		}
 		MoveIntoPackage(FinalPkg, PkgTarget);
 		FinalPkg->Model = FinalModel;
+		FinalPkg->DecoderModel = FinalDecoder;
 	}
 	Result.Package = FinalPkg;
 	Result.Model = FinalModel;
+	Result.DecoderModel = FinalDecoder;
 
 	// 7. Save.
 	if (Options.bSave)
 	{
-		const TArray<UPackage*> ToSave = {FinalPkg->GetOutermost(), FinalModel->GetOutermost()};
+		TArray<UPackage*> ToSave = {FinalPkg->GetOutermost(), FinalModel->GetOutermost()};
+		if (FinalDecoder)
+		{
+			ToSave.Add(FinalDecoder->GetOutermost());
+		}
 		if (!UEditorLoadingAndSavingUtils::SavePackages(ToSave, false))
 		{
 			Report.Add(ESev::Error, ECode::SaveFailed, FString::Printf(

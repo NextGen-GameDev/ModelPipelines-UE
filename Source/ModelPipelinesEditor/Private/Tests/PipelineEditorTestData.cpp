@@ -110,6 +110,7 @@ namespace UE::ModelPipelines::EditorTests
 		// Both objects are renamed out of their content packages regardless of order.
 		DiscardOne(Result.Package.Get());
 		DiscardOne(Result.Model.Get());
+		DiscardOne(Result.DecoderModel.Get());   // WP9S.6a: SpeechToText only, null otherwise
 	}
 
 	void ExpectImportFinding(FAutomationTestBase& Test, const TCHAR* Code, bool bIsError, int32 Count)
@@ -150,6 +151,71 @@ namespace UE::ModelPipelines::EditorTests
 		else if (Id == TEXT("bad_id2label")) { ExpectImportFinding(Test, TEXT("InvalidLabels"), true, Times); }
 		else { return; }
 		ExpectImportFailed(Test, Times);
+	}
+
+	UNNEModelData* LoadTinySttModel(const FString& FileName, FString& OutError)
+	{
+		const FString Path = GetModelsDir() / TEXT("test") / FileName;
+		TArray<uint8> Bytes;
+		if (!FFileHelper::LoadFileToArray(Bytes, *Path) || Bytes.Num() == 0)
+		{
+			OutError = FString::Printf(TEXT("Missing test model '%s'. Generate it with: D:/Micromamba/micromambaenv/envs/pipelines/python.exe \"D:/Game Dev/Pipelines-UE/ModelPipelines-UE/Tools/make_test_models.py\""), *Path);
+			return nullptr;
+		}
+		UNNEModelData* Data = NewObject<UNNEModelData>(GetTransientPackage());
+		Data->Init(TEXT("onnx"), TConstArrayView64<uint8>(Bytes.GetData(), (int64)Bytes.Num()));
+		return Data;
+	}
+
+	bool LoadFirstSttGoldenClip(TArray<float>& OutSamples, int32& OutSampleRate, FString& OutExpectedText, FString& OutClipId, FString& OutError)
+	{
+		const FString Dir = GetDevDir() / TEXT("goldens/stt");
+		const FString Hint = TEXT("Generate with: D:/Micromamba/micromambaenv/envs/pipelines/python.exe \"D:/Game Dev/Pipelines-UE/ModelPipelines-UE/Tools/make_stt_goldens.py\"");
+		FString Text;
+		if (!FFileHelper::LoadFileToString(Text, *(Dir / TEXT("stt_goldens.json"))))
+		{
+			OutError = FString::Printf(TEXT("Missing STT goldens '%s'. %s"), *(Dir / TEXT("stt_goldens.json")), *Hint);
+			return false;
+		}
+		TSharedPtr<FJsonObject> Root;
+		if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root.IsValid())
+		{
+			OutError = TEXT("stt_goldens.json is not valid JSON. ") + Hint;
+			return false;
+		}
+		const TArray<TSharedPtr<FJsonValue>>* Clips = nullptr;
+		const TSharedPtr<FJsonObject>* Settings = nullptr;
+		if (!Root->TryGetArrayField(TEXT("clips"), Clips) || Clips->Num() == 0)
+		{
+			OutError = TEXT("stt_goldens.json has no clips. ") + Hint;
+			return false;
+		}
+		OutSampleRate = 16000;
+		if (Root->TryGetObjectField(TEXT("settings"), Settings))
+		{
+			double Sr = 0;
+			if ((*Settings)->TryGetNumberField(TEXT("sample_rate"), Sr)) { OutSampleRate = (int32)Sr; }
+		}
+		const TSharedPtr<FJsonObject>* Clip = nullptr;
+		const TSharedPtr<FJsonObject>* Audio = nullptr;
+		const TSharedPtr<FJsonObject>* Onnx = nullptr;
+		FString AudioFile;
+		if (!(*Clips)[0]->TryGetObject(Clip) || !(*Clip)->TryGetObjectField(TEXT("audio"), Audio) || !(*Audio)->TryGetStringField(TEXT("file"), AudioFile)
+			|| !(*Clip)->TryGetObjectField(TEXT("onnx"), Onnx) || !(*Onnx)->TryGetStringField(TEXT("text"), OutExpectedText))
+		{
+			OutError = TEXT("first golden clip lacks audio.file or onnx.text. ") + Hint;
+			return false;
+		}
+		(*Clip)->TryGetStringField(TEXT("id"), OutClipId);
+		TArray<uint8> Raw;
+		if (!FFileHelper::LoadFileToArray(Raw, *(Dir / AudioFile)) || Raw.Num() < 4)
+		{
+			OutError = FString::Printf(TEXT("Missing golden audio '%s'. %s"), *(Dir / AudioFile), *Hint);
+			return false;
+		}
+		OutSamples.SetNumUninitialized(Raw.Num() / 4);
+		FMemory::Memcpy(OutSamples.GetData(), Raw.GetData(), OutSamples.Num() * 4);
+		return true;
 	}
 
 	void ExpectLicenseWarnings(FAutomationTestBase& Test, bool bSpdx, bool bSource, bool bAttribution)

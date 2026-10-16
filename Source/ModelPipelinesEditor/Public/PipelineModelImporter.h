@@ -74,6 +74,10 @@ struct MODELPIPELINESEDITOR_API FPipelineImportResult
 	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
 	TObjectPtr<UNNEModelData> Model;
 
+	/** The decoder model data asset (<Dest>/<Name>_Decoder); SpeechToText only, null otherwise (C78). */
+	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
+	TObjectPtr<UNNEModelData> DecoderModel;
+
 	/** Folder parse + settings + validation messages and device checks, then importer messages. */
 	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
 	FPipelineValidationReport Report;

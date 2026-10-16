@@ -62,6 +62,14 @@ struct MODELPIPELINESEDITOR_API FPipelineModelFolderInfo
 	/** config.json architectures[0], "" if absent. */
 	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
 	FString Architecture;
+
+	/** Absolute path of decoder_joint.onnx; "" unless SpeechToText (docs/contracts.md C78). */
+	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
+	FString DecoderModelFile;
+
+	/** Speech settings from processor_config.json + config.json; defaults unless SpeechToText (C78). */
+	UPROPERTY(BlueprintReadOnly, Category = "Pipelines")
+	FPipelineSpeechSettings Speech;
 };
 
 /**

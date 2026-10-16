@@ -9,6 +9,7 @@
 #include "Misc/AutomationTest.h"
 
 struct FPipelineImportResult;
+class UNNEModelData;
 
 namespace UE::ModelPipelines::EditorTests
 {
@@ -52,6 +53,20 @@ namespace UE::ModelPipelines::EditorTests
 	 * missing_preprocessor, missing_model, bad_config_json, no_task, bad_id2label. Unknown id: adds nothing.
 	 */
 	void ExpectCaseImportLogs(FAutomationTestBase& Test, const FString& Id, int32 Times = 1);
+
+	/**
+	 * WP9S.6a: loads <dev>/models/test/<FileName> (tiny_stt_encoder.onnx, tiny_stt_decoder_joint.onnx, tiny_stt_bad_decoder.onnx)
+	 * as a transient UNNEModelData ("onnx"). nullptr + OutError (path and the command to generate it) when missing. The caller
+	 * keeps it alive (TStrongObjectPtr).
+	 */
+	UNNEModelData* LoadTinySttModel(const FString& FileName, FString& OutError);
+
+	/**
+	 * WP9S.6a: the first clip of <dev>/goldens/stt/stt_goldens.json: its mono float32 samples (raw little-endian .f32 file),
+	 * the sample rate (settings.sample_rate), the onnx reference transcript (clips[0].onnx.text) and the clip id.
+	 * false + OutError (path and the command to generate it) when anything is missing.
+	 */
+	bool LoadFirstSttGoldenClip(TArray<float>& OutSamples, int32& OutSampleRate, FString& OutExpectedText, FString& OutClipId, FString& OutError);
 
 	/** WP7.8a: the three license warnings of a folder without license info (SPDX, source URL, attribution). */
 	void ExpectLicenseWarnings(FAutomationTestBase& Test, bool bSpdx, bool bSource, bool bAttribution);

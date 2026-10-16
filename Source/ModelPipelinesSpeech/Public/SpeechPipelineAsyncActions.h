@@ -52,7 +52,7 @@ public:
 	UPROPERTY(BlueprintAssignable)
 	FPipelineTranscribeSpeechPin OnFailure;
 
-	/** Transcribes interleaved float samples (any rate 1000..384000, any channel count, at most 35 s). Runs in the
+	/** Transcribes interleaved float samples (any rate 1000..384000, any channel count, up to 600 s; longer than 35 s is split at quiet points). Runs in the
 	    background; a null or not initialized pipeline, or invalid audio, ends in On Failure. */
 	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Speech",
 		meta = (BlueprintInternalUseOnly = "true", WorldContext = "WorldContextObject", DisplayName = "Transcribe Speech"))
@@ -109,7 +109,7 @@ public:
 	UPROPERTY(BlueprintAssignable)
 	FPipelineTranscribeSpeechPin OnFailure;
 
-	/** Transcribes a sound wave asset (at most 35 s; procedural waves are not supported). The audio is decoded in the
+	/** Transcribes a sound wave asset (up to 600 s; procedural waves are not supported). The audio is decoded in the
 	    background; a null pipeline or sound, or audio that cannot be decoded, ends in On Failure. */
 	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Speech",
 		meta = (BlueprintInternalUseOnly = "true", WorldContext = "WorldContextObject", DisplayName = "Transcribe Sound Wave"))

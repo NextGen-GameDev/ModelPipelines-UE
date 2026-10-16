@@ -23,7 +23,7 @@ namespace UE::ModelPipelines::Speech
 }
 
 /**
- * Speech-to-text pipeline (docs/contracts.md C75): clips up to 35 s. The front end (mono mix, resampling, silence gate,
+ * Speech-to-text pipeline: calls up to 600 s (longer than 35 s are split at quiet points into 25-35 s windows). The front end (mono mix, resampling, silence gate,
  * log-mel) runs on a background task, the encoder as an executor job, the greedy TDT loop as an executor session on the
  * decoder (CPU), and token decoding plus word times on the game thread.
  */

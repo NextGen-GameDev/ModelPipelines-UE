@@ -1041,6 +1041,108 @@ namespace UE::ModelPipelines::FolderPrivate
 		}
 		return false;
 	}
+
+	/** Required, non-empty speech graph file (C78). Adds MissingModelFile naming it otherwise; returns "" then. */
+	static FString FindSpeechFile(FContext& Ctx, const TCHAR* Name)
+	{
+		const FString Path = Ctx.Folder + TEXT("/") + Name;
+		IFileManager& FM = IFileManager::Get();
+		if (!FM.FileExists(*Path))
+		{
+			Ctx.Error(ECode::MissingModelFile, FString::Printf(TEXT("SpeechToText needs %s in '%s', but it is missing. Export the speech model's two graphs (encoder.onnx and decoder_joint.onnx) into this folder."), Name, *Ctx.Folder));
+			return FString();
+		}
+		if (FM.FileSize(*Path) <= 0)
+		{
+			Ctx.Error(ECode::MissingModelFile, FString::Printf(TEXT("Model file '%s' (%s) is empty (0 bytes). Re-export or re-download the model."), *Path, Name));
+			return FString();
+		}
+		return Path;
+	}
+
+	/** Speech settings (C78 rule 3). Missing keys keep the defaults; wrong types add InvalidJson "<file>: <key>". */
+	static void ReadSpeechSettings(FContext& Ctx, const TSharedPtr<FJsonObject>& Config, const TSharedPtr<FJsonObject>& ProcessorConfig, FPipelineSpeechSettings& S)
+	{
+		const TCHAR* PFile = TEXT("processor_config.json");
+		const TCHAR* CFile = TEXT("config.json");
+		TSharedPtr<FJsonObject> FE;
+		{
+			const TSharedPtr<FJsonValue> V = GetValue(ProcessorConfig, TEXT("feature_extractor"));
+			if (V.IsValid())
+			{
+				if (V->Type != EJson::Object)
+				{
+					TypeError(Ctx, Where(PFile, TEXT("feature_extractor")), TEXT("an object"), V);
+				}
+				else
+				{
+					FE = V->AsObject();
+				}
+			}
+		}
+		ReadInt(Ctx, FE, PFile, TEXT("sampling_rate"), S.SampleRate);
+		ReadInt(Ctx, FE, PFile, TEXT("feature_size"), S.NumMelBins);
+		ReadInt(Ctx, FE, PFile, TEXT("n_fft"), S.FftSize);
+		ReadInt(Ctx, FE, PFile, TEXT("win_length"), S.WindowLength);
+		ReadInt(Ctx, FE, PFile, TEXT("hop_length"), S.HopLength);
+		double Pre = 0.0;
+		if (ReadNumber(Ctx, FE, PFile, TEXT("preemphasis"), Pre) == ERead::Ok)
+		{
+			S.Preemphasis = (float)Pre;
+		}
+		ReadInt(Ctx, Config, CFile, TEXT("blank_token_id"), S.BlankTokenId);
+		ReadInt(Ctx, Config, CFile, TEXT("max_symbols_per_step"), S.MaxSymbolsPerStep);
+		{
+			const TSharedPtr<FJsonValue> V = GetValue(Config, TEXT("durations"));
+			if (V.IsValid())
+			{
+				const FString W = Where(CFile, TEXT("durations"));
+				if (V->Type != EJson::Array)
+				{
+					TypeError(Ctx, W, TEXT("a list of integers"), V);
+				}
+				else
+				{
+					TArray<int32> Durations;
+					bool bOk = true;
+					const TArray<TSharedPtr<FJsonValue>>& Arr = V->AsArray();
+					for (int32 i = 0; i < Arr.Num() && bOk; ++i)
+					{
+						int32 D = 0;
+						if (!Arr[i].IsValid() || Arr[i]->Type == EJson::Null || Arr[i]->Type == EJson::None)
+						{
+							Ctx.Error(ECode::InvalidJson, FString::Printf(TEXT("%s[%d] must be an integer, found null. Fix the value in the file."), *W, i));
+							bOk = false;
+						}
+						else if (!ValueToInt(Ctx, Arr[i], FString::Printf(TEXT("%s[%d]"), *W, i), D))
+						{
+							bOk = false;
+						}
+						Durations.Add(D);
+					}
+					if (bOk)
+					{
+						S.Durations = MoveTemp(Durations);
+					}
+				}
+			}
+		}
+		{
+			const TSharedPtr<FJsonValue> V = GetValue(Config, TEXT("encoder_config"));
+			if (V.IsValid())
+			{
+				if (V->Type != EJson::Object)
+				{
+					TypeError(Ctx, Where(CFile, TEXT("encoder_config")), TEXT("an object"), V);
+				}
+				else
+				{
+					// Nested in encoder_config; the message names "config.json: subsampling_factor" (C78 "<file>: <key>").
+					ReadInt(Ctx, V->AsObject(), CFile, TEXT("subsampling_factor"), S.SubsamplingFactor);
+				}
+			}
+		}
+	}
 }
 
 bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride, FPipelineModelFolderInfo& OutInfo, FPipelineValidationReport& InOutReport)
@@ -1065,6 +1167,25 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 		Ctx.Error(ECode::FolderNotFound, FString::Printf(TEXT("Model folder '%s' does not exist or is not a folder. Pass the folder that holds model.onnx."), *Ctx.Folder));
 		return false;
 	}
+	// C78: a speech folder picks its graph files once the task is known; model.onnx is not used for SpeechToText. Unless a
+	// non-speech override fixes the task now, a model.onnx error waits until the task is known (a sidecar or config.json
+	// can say SpeechToText). It is reported for every non-speech task and before every early return, at the report
+	// position it would have had, so the message order of non-speech folders is unchanged.
+	const bool bDeferModelError = TaskOverride == EPipelineTask::None || TaskOverride == EPipelineTask::SpeechToText;
+	FString DeferredModelError;
+	int32 DeferredModelErrorIndex = INDEX_NONE;
+	auto EmitDeferredModelError = [&Ctx, &DeferredModelError, &DeferredModelErrorIndex]()
+	{
+		if (!DeferredModelError.IsEmpty())
+		{
+			FPipelineValidationMessage Msg;
+			Msg.Severity = ESev::Error;
+			Msg.Code = ECode::MissingModelFile;
+			Msg.Message = MoveTemp(DeferredModelError);
+			Ctx.Report.Messages.Insert(MoveTemp(Msg), FMath::Clamp(DeferredModelErrorIndex, 0, Ctx.Report.Messages.Num()));
+			DeferredModelError.Reset();
+		}
+	};
 	{
 		const FString Candidates[] = {Ctx.Folder + TEXT("/model.onnx"), Ctx.Folder + TEXT("/onnx/model.onnx")};
 		// C14 rule 1 is literal: the first candidate that exists is THE model file (onnx/model.onnx only when
@@ -1087,9 +1208,18 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 		}
 		if (OutInfo.ModelFile.IsEmpty())
 		{
-			Ctx.Error(ECode::MissingModelFile, EmptyFile.IsEmpty()
+			const FString Msg = EmptyFile.IsEmpty()
 				? FString::Printf(TEXT("No model file in '%s': expected model.onnx or onnx/model.onnx. Export the model to ONNX (e.g. optimum-cli export onnx) into this folder."), *Ctx.Folder)
-				: FString::Printf(TEXT("Model file '%s' is empty (0 bytes). Re-export or re-download the model."), *EmptyFile));
+				: FString::Printf(TEXT("Model file '%s' is empty (0 bytes). Re-export or re-download the model."), *EmptyFile);
+			if (bDeferModelError)
+			{
+				DeferredModelError = Msg;
+				DeferredModelErrorIndex = Ctx.Report.Messages.Num();
+			}
+			else
+			{
+				Ctx.Error(ECode::MissingModelFile, Msg);
+			}
 		}
 	}
 
@@ -1113,6 +1243,7 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 	}
 	if (!bJsonOk)
 	{
+		EmitDeferredModelError();
 		return false;
 	}
 
@@ -1174,7 +1305,7 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 	EPipelineTask Task = EPipelineTask::None;
 	if (TaskOverride != EPipelineTask::None)
 	{
-		if ((uint8)TaskOverride > (uint8)EPipelineTask::ObjectDetection)
+		if ((uint8)TaskOverride > (uint8)EPipelineTask::ObjectDetection && TaskOverride != EPipelineTask::SpeechToText)
 		{
 			Ctx.Error(ECode::TaskUndetected, FString::Printf(TEXT("Task override value %d is not a valid task."), (int32)(uint8)TaskOverride));
 			return false;
@@ -1191,12 +1322,14 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 			if (TaskV->Type != EJson::String || !TaskV->TryGetString(Name))
 			{
 				TypeError(Ctx, TEXT("modelpipelines.json: task"), TEXT("a task name string"), TaskV);
+				EmitDeferredModelError();
 				return false;
 			}
 			EPipelineTask Parsed = EPipelineTask::None;
 			if (!LexTryParseString(Parsed, *Name) || Parsed == EPipelineTask::None)
 			{
-				Ctx.Error(ECode::InvalidJson, FString::Printf(TEXT("modelpipelines.json: task '%s' is unknown; use TextEmbedding, TextClassification, ImageClassification or ObjectDetection."), *Name));
+				Ctx.Error(ECode::InvalidJson, FString::Printf(TEXT("modelpipelines.json: task '%s' is unknown; use TextEmbedding, TextClassification, ImageClassification, ObjectDetection or SpeechToText."), *Name));
+				EmitDeferredModelError();
 				return false;
 			}
 			Task = Parsed;
@@ -1210,7 +1343,8 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 		else if (!OutInfo.Architecture.IsEmpty())
 		{
 			const FString& A = OutInfo.Architecture;
-			if (A.EndsWith(TEXT("ForSequenceClassification"), ESearchCase::CaseSensitive)) { Task = EPipelineTask::TextClassification; }
+			if (A.Equals(TEXT("ParakeetForTDT"), ESearchCase::CaseSensitive)) { Task = EPipelineTask::SpeechToText; }
+			else if (A.EndsWith(TEXT("ForSequenceClassification"), ESearchCase::CaseSensitive)) { Task = EPipelineTask::TextClassification; }
 			else if (A.EndsWith(TEXT("ForImageClassification"), ESearchCase::CaseSensitive)) { Task = EPipelineTask::ImageClassification; }
 			else if (A.EndsWith(TEXT("ForObjectDetection"), ESearchCase::CaseSensitive)) { Task = EPipelineTask::ObjectDetection; }
 			else if (A.EndsWith(TEXT("Model"), ESearchCase::CaseSensitive) && FM.FileExists(*(Ctx.Folder / TEXT("tokenizer.json")))) { Task = EPipelineTask::TextEmbedding; }
@@ -1228,13 +1362,25 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 			{
 				Ctx.Error(ECode::MissingConfig, TEXT("config.json not found: it is needed to detect the task. Add the model repository's config.json to the folder."));
 			}
+			EmitDeferredModelError();
 			return false;
 		}
 	}
 	OutInfo.Task = Task;
 
+	// 3b. SpeechToText graph files (C78 rule 2); other tasks report a deferred model.onnx error now.
+	if (Task == EPipelineTask::SpeechToText)
+	{
+		OutInfo.ModelFile = FindSpeechFile(Ctx, TEXT("encoder.onnx"));
+		OutInfo.DecoderModelFile = FindSpeechFile(Ctx, TEXT("decoder_joint.onnx"));
+	}
+	else
+	{
+		EmitDeferredModelError();
+	}
+
 	// 4. Tokenizer.
-	if (IsTextTask(Task))
+	if (IsTextTask(Task) || Task == EPipelineTask::SpeechToText)
 	{
 		const FString TokPath = Ctx.Folder / TEXT("tokenizer.json");
 		if (!FM.FileExists(*TokPath))
@@ -1245,6 +1391,17 @@ bool ParsePipelineModelFolder(const FString& Folder, EPipelineTask TaskOverride,
 		{
 			OutInfo.TokenizerJson.Reset();
 			Ctx.Error(ECode::MissingTokenizer, TEXT("tokenizer.json could not be read. Check its permissions."));
+		}
+	}
+
+	// 4b. Speech settings (C78 rule 3).
+	if (Task == EPipelineTask::SpeechToText)
+	{
+		TSharedPtr<FJsonObject> ProcessorConfig;
+		bool bProcessorPresent = false;
+		if (LoadJsonObject(Ctx, TEXT("processor_config.json"), ProcessorConfig, bProcessorPresent))
+		{
+			ReadSpeechSettings(Ctx, Config, ProcessorConfig, OutInfo.Speech);
 		}
 	}
 

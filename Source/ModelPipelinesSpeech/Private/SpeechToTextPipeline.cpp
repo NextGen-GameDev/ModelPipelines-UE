@@ -17,6 +17,7 @@
 #include "PipelineTensor.h"
 #include "PipelineTokenizer.h"
 #include "SpeechDecodeSession.h"
+#include "SpeechSoundWaveDecode.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SpeechToTextPipeline)
 
@@ -525,6 +526,85 @@ void USpeechToTextPipeline::Transcribe(TArray<float> Samples, int32 SampleRate, 
 			Pipeline->StartEncoder(Call);
 		});
 	});
+}
+
+void USpeechToTextPipeline::TranscribeSoundWave(USoundWave* Sound, FOnSpeechTranscribed OnDone)
+{
+	using namespace UE::ModelPipelines::Speech;
+	using namespace UE::ModelPipelines::Speech::PipelinePrivate;
+
+	if (!OnDone)
+	{
+		UE_LOG(LogModelPipelinesSpeech, Warning, TEXT("USpeechToTextPipeline::TranscribeSoundWave: null callback, nothing runs"));
+		return;
+	}
+
+	// Holds OnDone until the decode ends; its destructor delivers Cancelled if a task is dropped at executor shutdown.
+	const FSpeechCallRef Holder = MakeShared<FSpeechCall, ESPMode::ThreadSafe>();
+	Holder->OnDone = MoveTemp(OnDone);
+
+	// C76 rule 1, in order. ValidateCall with an empty mono 16 kHz clip reports only the readiness check.
+	FPipelineResult Check = FPipelineResult::Ok();
+	if (!IsInGameThread())
+	{
+		Check = FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("USpeechToTextPipeline::TranscribeSoundWave must be called on the game thread"));
+	}
+	else if (!IsReady())
+	{
+		Check = ValidateCall(false, TConstArrayView<float>(), 16000, 1);
+	}
+	else if (!Sound)
+	{
+		Check = FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("Sound is null"));
+	}
+	else if (Sound->IsProcedurallyGenerated())
+	{
+		Check = FPipelineResult::Fail(EPipelineError::InvalidArgument,
+			FString::Printf(TEXT("'%s': procedural sound waves have no stored audio"), *Sound->GetName()));
+	}
+	else if ((double)Sound->Duration > MaxSecondsPerCall)
+	{
+		Check = FPipelineResult::Fail(EPipelineError::InvalidArgument,
+			FString::Printf(TEXT("sound wave '%s' is %.2f s; at most 35 s per call until long-audio support"), *Sound->GetName(), Sound->Duration));
+	}
+	if (!Check.bSuccess)
+	{
+		DeliverLater(Holder, Check, FSpeechTranscript());
+		return;
+	}
+
+	// C76 rule 2: cheap game-thread capture (RawPCMData copy or the thread-safe snapshot); the wave stays alive until the decode ends.
+	TSharedRef<FSoundWaveSource, ESPMode::ThreadSafe> Source = MakeShared<FSoundWaveSource, ESPMode::ThreadSafe>();
+	CaptureSoundWaveSource(*Sound, *Source);
+	TStrongObjectPtr<USoundWave> KeepAlive(Sound);
+
+	TWeakObjectPtr<USpeechToTextPipeline> WeakThis(this);
+	UE::Tasks::Launch(TEXT("ModelPipelinesSpeechSoundWaveDecode"),
+		[Holder = FSpeechCallRef(Holder), Source = MoveTemp(Source), KeepAlive = MoveTemp(KeepAlive), WeakThis]() mutable
+	{
+		int32 Rate = 0;
+		int32 Channels = 0;
+		const FPipelineResult Decoded = DecodeSoundWaveSource(*Source, Holder->Samples, Rate, Channels);
+		AsyncTask(ENamedThreads::GameThread, [Holder = MoveTemp(Holder), KeepAlive = MoveTemp(KeepAlive), WeakThis, Decoded, Rate, Channels]() mutable
+		{
+			KeepAlive.Reset(); // released on the game thread
+			if (!Decoded.bSuccess)
+			{
+				DeliverFailure(*Holder, Decoded);
+				return;
+			}
+			USpeechToTextPipeline* Pipeline = WeakThis.Get();
+			if (!Pipeline)
+			{
+				DeliverFailure(*Holder, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the pipeline was destroyed before inference")));
+				return;
+			}
+			// C76 rule 4: exactly the Transcribe path (C75) on the decoded samples.
+			FOnSpeechTranscribed Callback = MoveTemp(Holder->OnDone);
+			Holder->OnDone = nullptr;
+			Pipeline->Transcribe(MoveTemp(Holder->Samples), Rate, Channels, MoveTemp(Callback));
+		});
+	}, UE::Tasks::ETaskPriority::BackgroundNormal);  // the streamed-chunk poll sleeps; keep it off foreground workers
 }
 
 void USpeechToTextPipeline::StartEncoder(const TSharedRef<UE::ModelPipelines::Speech::FSpeechCall, ESPMode::ThreadSafe>& Call)

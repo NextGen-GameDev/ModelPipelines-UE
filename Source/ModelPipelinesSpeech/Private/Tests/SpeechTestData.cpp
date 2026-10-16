@@ -12,6 +12,9 @@
 #include "NNEModelData.h"
 #include "PipelineModelPackage.h"
 #include "UObject/Package.h"
+#include "Sound/SoundWave.h"
+#include "SpeechPipelineLibrary.h"
+#include "SpeechToTextPipeline.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 #include "Misc/Paths.h"
@@ -385,6 +388,98 @@ namespace UE::ModelPipelines::SpeechTests
 		}
 		OutPackage = S.Tiny.Get();
 		return true;
+	}
+
+	// ---- WP9S.5b helpers ----
+
+	namespace
+	{
+		struct FSharedSttPipelines
+		{
+			TStrongObjectPtr<USpeechToTextPipeline> Cpu;
+			TStrongObjectPtr<USpeechToTextPipeline> Tiny;
+		};
+
+		FSharedSttPipelines* GPipes = nullptr;
+
+		FSharedSttPipelines& Pipes()
+		{
+			if (!GPipes)
+			{
+				GPipes = new FSharedSttPipelines();
+				FCoreDelegates::OnEnginePreExit.AddLambda([]()
+				{
+					if (GPipes)
+					{
+						GPipes->Cpu.Reset();
+						GPipes->Tiny.Reset();
+					}
+				});
+			}
+			return *GPipes;
+		}
+	}
+
+	USpeechToTextPipeline* GetSharedCpuSttPipeline(FString& OutError)
+	{
+		FSharedSttPipelines& S = Pipes();
+		if (!S.Cpu.IsValid())
+		{
+			UPipelineModelPackage* Pkg = nullptr;
+			if (!GetSharedPhononPackage(EPipelineDevice::CPU, Pkg, OutError)) { return nullptr; }
+			FPipelineResult R;
+			USpeechToTextPipeline* P = USpeechPipelineLibrary::CreateSpeechToTextPipeline(Pkg, R);
+			if (!P)
+			{
+				OutError = FString::Printf(TEXT("CreateSpeechToTextPipeline failed on the Phonon package: %s"), *R.Message);
+				return nullptr;
+			}
+			S.Cpu.Reset(P);
+		}
+		return S.Cpu.Get();
+	}
+
+	USpeechToTextPipeline* GetSharedTinySttPipeline(FString& OutError)
+	{
+		FSharedSttPipelines& S = Pipes();
+		if (!S.Tiny.IsValid())
+		{
+			UPipelineModelPackage* Pkg = nullptr;
+			if (!GetSharedTinySttPackage(Pkg, OutError)) { return nullptr; }
+			FPipelineResult R;
+			USpeechToTextPipeline* P = USpeechPipelineLibrary::CreateSpeechToTextPipeline(Pkg, R);
+			if (!P)
+			{
+				OutError = FString::Printf(TEXT("CreateSpeechToTextPipeline failed on the tiny package: %s"), *R.Message);
+				return nullptr;
+			}
+			S.Tiny.Reset(P);
+		}
+		return S.Tiny.Get();
+	}
+
+	void FloatToInt16(TConstArrayView<float> In, TArray<int16>& Out)
+	{
+		Out.SetNumUninitialized(In.Num());
+		for (int32 i = 0; i < In.Num(); ++i)
+		{
+			Out[i] = (int16)FMath::Clamp(FMath::RoundToInt(In[i] * 32768.0f), -32768, 32767);
+		}
+	}
+
+	USoundWave* MakeGeneratedSoundWave(const TArray<int16>& Interleaved, int32 SampleRate, int32 NumChannels)
+	{
+		USoundWave* W = NewObject<USoundWave>(GetTransientPackage());
+		const int32 N = Interleaved.Num();
+		const int32 Frames = NumChannels > 0 ? N / NumChannels : 0;
+		W->SetSampleRate((uint32)SampleRate);
+		W->NumChannels = NumChannels;
+		W->Duration = (float)Frames / (float)SampleRate;
+		W->TotalSamples = (float)N;
+		W->RawPCMDataSize = N * (int32)sizeof(int16);
+		W->RawPCMData = (uint8*)FMemory::Malloc(W->RawPCMDataSize);
+		FMemory::Memcpy(W->RawPCMData, Interleaved.GetData(), W->RawPCMDataSize);
+		return W;
 	}
 }
 

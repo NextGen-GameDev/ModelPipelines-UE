@@ -14,6 +14,7 @@
 
 class UPipelineTokenizer;
 class UPipelineModelPackage;
+class USoundWave;
 
 namespace UE::ModelPipelines::Speech
 {
@@ -37,6 +38,11 @@ public:
 
 	/** Game thread. Samples interleaved, any rate 1000..384000, any channel count >= 1. Null callback -> Warning, nothing runs. */
 	void Transcribe(TArray<float> Samples, int32 SampleRate, int32 NumChannels, FOnSpeechTranscribed OnDone);
+
+	/** Game thread (docs/contracts.md C76). Decodes the wave's PCM off the game thread (the wave is kept alive until the decode
+	    ends), then runs exactly the Transcribe path on the decoded interleaved float samples at the wave's own rate and channel
+	    count. Every failure is delivered on a later game-thread tick. Null callback -> Warning, nothing runs. */
+	void TranscribeSoundWave(USoundWave* Sound, FOnSpeechTranscribed OnDone);
 
 	/** Tests/tools: blocking, any thread except the executor worker and the game thread; caller keeps the pipeline alive. */
 	FPipelineResult TranscribeBlocking(TConstArrayView<float> Samples, int32 SampleRate, int32 NumChannels, FSpeechTranscript& Out);

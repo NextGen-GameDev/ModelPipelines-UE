@@ -9,7 +9,7 @@ public class ModelPipelinesSpeech : ModuleRules
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "ModelPipelinesCore" });
-		PrivateDependencyModuleNames.AddRange(new string[] { "ModelPipelinesTokenizer" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "ModelPipelinesTokenizer", "SignalProcessing" });
 
 		// Automation tests only: read goldens (Json) and build model packages (NNE). Not needed in Shipping.
 		if (Target.Configuration != UnrealTargetConfiguration.Shipping)

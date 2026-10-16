@@ -9,6 +9,8 @@
 
 class UPipelineModelPackage;
 class UNNEModelData;
+class USoundWave;
+class USpeechToTextPipeline;
 
 namespace UE::ModelPipelines::SpeechTests
 {
@@ -97,6 +99,24 @@ namespace UE::ModelPipelines::SpeechTests
 
 	/** A tiny .onnx from <dev>/models/test as a new UNNEModelData (outer = transient package). Game thread. */
 	UNNEModelData* LoadTestModelData(const FString& FileName, FString& OutError);
+
+	// ---- WP9S.5b ----
+
+	/** ONE CPU Phonon pipeline for the whole process (WP9S.5b specs share it), created on first use. Game thread. Null + OutError on failure. */
+	USpeechToTextPipeline* GetSharedCpuSttPipeline(FString& OutError);
+
+	/** One pipeline on the tiny package (error paths only), created on first use. Game thread. */
+	USpeechToTextPipeline* GetSharedTinySttPipeline(FString& OutError);
+
+	/** round(s * 32768) clamped to int16. */
+	void FloatToInt16(TConstArrayView<float> In, TArray<int16>& Out);
+
+	/**
+	 * A transient USoundWave filled like the engine's FSoundWavePCMWriter::ApplyBufferToSoundWave: SetSampleRate, NumChannels, Duration,
+	 * TotalSamples, RawPCMDataSize, RawPCMData (int16 interleaved). No asset, no compressed data. Game thread. The caller owns it
+	 * (wrap in a TStrongObjectPtr if a GC can run).
+	 */
+	USoundWave* MakeGeneratedSoundWave(const TArray<int16>& Interleaved, int32 SampleRate, int32 NumChannels);
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

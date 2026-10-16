@@ -166,3 +166,9 @@ Tiny speech-to-text test graphs (WP9S.3t, contract C72c): `make_test_models.py` 
 (6 encoder frames and the C70 greedy steps/ids computed with onnxruntime). The existing 4 models keep their exact bytes.
 Note: numpy matmul crashes when the env's python.exe is called un-activated (its `Library\bin` is not on PATH); use
 `micromamba run -n <env> python` for scripts that do matrix maths.
+
+**Long audio (C77, WP9S.5c1).** `stt/long_audio.py` is the reference for cutting calls longer than 35 s into 25-35 s windows at
+the quietest 200 ms (float64 prefix sums, ties to the earliest position); `make_stt_long_goldens.py --make-spec` writes the
+visible spec and the bare command writes `<dev>/goldens/stt/long/long_goldens.json` (schema `stt-long-goldens/1`) plus
+`long_audio/*.f32`, with the corpus WER of long vs per-utterance vs fixed-30 s cuts. Run it through micromamba with the
+`pipelines-stt` env; the output is byte-identical on rerun. Tests: `tests/test_stt_long.py`.

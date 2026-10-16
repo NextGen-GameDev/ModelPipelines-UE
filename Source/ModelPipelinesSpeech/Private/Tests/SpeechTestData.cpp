@@ -481,6 +481,152 @@ namespace UE::ModelPipelines::SpeechTests
 		FMemory::Memcpy(W->RawPCMData, Interleaved.GetData(), W->RawPCMDataSize);
 		return W;
 	}
+
+	// ---- WP9S.5c2 ----
+	namespace
+	{
+		const TCHAR* const LongFetchHint = TEXT("Generate the long-audio STT goldens with: \"D:/Micromamba/micromambaenv/envs/pipelines-stt/python.exe\" ModelPipelines-UE/Tools/make_stt_long_goldens.py");
+
+		FSttLongGoldens GLongCache;
+		bool GLongLoaded = false;
+		FString GLongError;
+		FCriticalSection GLongLock;
+
+		bool ParseLongWords(const TSharedPtr<FJsonObject>& O, TArray<FSttLongWord>& Out)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+			if (!O->TryGetArrayField(TEXT("words"), Arr)) { return false; }
+			for (const TSharedPtr<FJsonValue>& V : *Arr)
+			{
+				const TArray<TSharedPtr<FJsonValue>>* Triple = nullptr;
+				if (!V.IsValid() || !V->TryGetArray(Triple) || Triple->Num() != 3) { return false; }
+				FSttLongWord W;
+				W.Word = (*Triple)[0]->AsString();
+				W.Start = (*Triple)[1]->AsNumber();
+				W.End = (*Triple)[2]->AsNumber();
+				Out.Add(MoveTemp(W));
+			}
+			return true;
+		}
+
+		bool ParseLongGoldens(FSttLongGoldens& Out, FString& OutError)
+		{
+			Out.Dir = GetDevDir() / TEXT("goldens/stt/long");
+			const FString Path = Out.Dir / TEXT("long_goldens.json");
+			FString Text;
+			if (!FFileHelper::LoadFileToString(Text, *Path))
+			{
+				OutError = FString::Printf(TEXT("Missing long-audio STT goldens '%s'. %s"), *Path, LongFetchHint);
+				return false;
+			}
+			TSharedPtr<FJsonObject> Root;
+			const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Text);
+			const TArray<TSharedPtr<FJsonValue>>* Recs = nullptr;
+			if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid() || !Root->TryGetArrayField(TEXT("recordings"), Recs))
+			{
+				OutError = FString::Printf(TEXT("Long-audio STT goldens '%s' are not valid JSON or have no \"recordings\" array. %s"), *Path, LongFetchHint);
+				return false;
+			}
+			for (const TSharedPtr<FJsonValue>& V : *Recs)
+			{
+				const TSharedPtr<FJsonObject>* RO = nullptr;
+				if (!V.IsValid() || !V->TryGetObject(RO)) { continue; }
+				FSttLongRecording R;
+				const TSharedPtr<FJsonObject>* Audio = nullptr;
+				const TArray<TSharedPtr<FJsonValue>>* Wins = nullptr;
+				double N = 0.0;
+				if (!(*RO)->TryGetStringField(TEXT("id"), R.Id) || !(*RO)->TryGetObjectField(TEXT("audio"), Audio)
+					|| !(*Audio)->TryGetStringField(TEXT("file"), R.AudioFile) || !(*Audio)->TryGetNumberField(TEXT("num_samples"), N)
+					|| !(*RO)->TryGetStringField(TEXT("text"), R.Text) || !(*RO)->TryGetArrayField(TEXT("windows"), Wins)
+					|| !ParseLongWords(*RO, R.Words))
+				{
+					OutError = FString::Printf(TEXT("Long-audio STT goldens '%s': a recording lacks id/audio/text/windows/words. %s"), *Path, LongFetchHint);
+					return false;
+				}
+				R.NumSamples = (int32)N;
+				(*RO)->TryGetStringField(TEXT("kind"), R.Kind);
+				(*RO)->TryGetStringField(TEXT("ref"), R.Ref);
+				for (const TSharedPtr<FJsonValue>& WV : *Wins)
+				{
+					const TSharedPtr<FJsonObject>* WO = nullptr;
+					const TArray<TSharedPtr<FJsonValue>>* Ids = nullptr;
+					double S = 0.0, E = 0.0;
+					FSttLongWindow W;
+					if (!WV.IsValid() || !WV->TryGetObject(WO) || !(*WO)->TryGetNumberField(TEXT("start"), S) || !(*WO)->TryGetNumberField(TEXT("end"), E)
+						|| !(*WO)->TryGetBoolField(TEXT("gated"), W.bGated) || !(*WO)->TryGetNumberField(TEXT("rms_dbfs"), W.RmsDbfs)
+						|| !(*WO)->TryGetStringField(TEXT("text"), W.Text) || !(*WO)->TryGetArrayField(TEXT("token_ids"), Ids) || !ParseLongWords(*WO, W.Words))
+					{
+						OutError = FString::Printf(TEXT("Long-audio STT goldens '%s': a window of '%s' is malformed. %s"), *Path, *R.Id, LongFetchHint);
+						return false;
+					}
+					W.Start = (int32)S;
+					W.End = (int32)E;
+					for (const TSharedPtr<FJsonValue>& T : *Ids) { W.TokenIds.Add((int32)T->AsNumber()); }
+					R.Windows.Add(MoveTemp(W));
+				}
+				Out.Recordings.Add(MoveTemp(R));
+			}
+			if (Out.Recordings.Num() == 0)
+			{
+				OutError = FString::Printf(TEXT("Long-audio STT goldens '%s' hold no recordings. %s"), *Path, LongFetchHint);
+				return false;
+			}
+			return true;
+		}
+	}
+
+	const FSttLongRecording* FSttLongGoldens::Find(const FString& Id) const
+	{
+		for (const FSttLongRecording& R : Recordings)
+		{
+			if (R.Id.Equals(Id, ESearchCase::CaseSensitive)) { return &R; }
+		}
+		return nullptr;
+	}
+
+	void ReleaseSharedCpuSttPipeline()
+	{
+		Pipes().Cpu.Reset();
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	}
+
+	bool LoadSttLongGoldens(const FSttLongGoldens*& OutGoldens, FString& OutError)
+	{
+		FScopeLock Lock(&GLongLock);
+		if (!GLongLoaded)
+		{
+			GLongLoaded = ParseLongGoldens(GLongCache, GLongError);
+			if (!GLongLoaded) { GLongCache = FSttLongGoldens(); }
+		}
+		if (!GLongLoaded)
+		{
+			OutGoldens = nullptr;
+			OutError = GLongError;
+			return false;
+		}
+		OutGoldens = &GLongCache;
+		return true;
+	}
+
+	bool LoadLongAudio(const FSttLongGoldens& G, const FSttLongRecording& Rec, TArray<float>& OutSamples, FString& OutError)
+	{
+		OutSamples.Reset();
+		const FString Path = G.Dir / Rec.AudioFile;
+		TArray<uint8> Bytes;
+		if (!FFileHelper::LoadFileToArray(Bytes, *Path))
+		{
+			OutError = FString::Printf(TEXT("Missing long-audio sidecar '%s'. %s"), *Path, LongFetchHint);
+			return false;
+		}
+		if ((int64)Bytes.Num() != (int64)Rec.NumSamples * 4)
+		{
+			OutError = FString::Printf(TEXT("Long-audio sidecar '%s' is %d bytes, expected %lld. %s"), *Path, Bytes.Num(), (int64)Rec.NumSamples * 4, LongFetchHint);
+			return false;
+		}
+		OutSamples.SetNumUninitialized(Rec.NumSamples);
+		if (Rec.NumSamples > 0) { FMemory::Memcpy(OutSamples.GetData(), Bytes.GetData(), Bytes.Num()); }
+		return true;
+	}
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

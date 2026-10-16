@@ -117,6 +117,57 @@ namespace UE::ModelPipelines::SpeechTests
 	 * (wrap in a TStrongObjectPtr if a GC can run).
 	 */
 	USoundWave* MakeGeneratedSoundWave(const TArray<int16>& Interleaved, int32 SampleRate, int32 NumChannels);
+
+	// ---- WP9S.5c2: long-audio goldens (<dev>/goldens/stt/long/long_goldens.json, schema stt-long-goldens/1) ----
+
+	struct FSttLongWord
+	{
+		FString Word;
+		double Start = 0.0;   // seconds (window-local in FSttLongWindow::Words, global in FSttLongRecording::Words)
+		double End = 0.0;
+	};
+
+	struct FSttLongWindow
+	{
+		int32 Start = 0;      // [Start, End) in samples of the 16 kHz mono signal
+		int32 End = 0;
+		double RmsDbfs = 0.0;
+		bool bGated = false;
+		TArray<int32> TokenIds;
+		FString Text;
+		TArray<FSttLongWord> Words;
+	};
+
+	struct FSttLongRecording
+	{
+		FString Id;
+		FString Kind;          // "librispeech", or the synthetic silence/gap ones
+		FString AudioFile;     // relative to FSttLongGoldens::Dir
+		int32 NumSamples = 0;
+		FString Ref;           // reference transcript (may be empty)
+		TArray<FSttLongWindow> Windows;
+		FString Text;
+		TArray<FSttLongWord> Words;
+	};
+
+	struct FSttLongGoldens
+	{
+		FString Dir;           // <dev>/goldens/stt/long
+		TArray<FSttLongRecording> Recordings;
+		const FSttLongRecording* Find(const FString& Id) const;
+	};
+
+	/**
+	 * Drops the strong reference to the shared CPU pipeline and runs a GC, so it is destroyed (if no other strong ref exists).
+	 * The next GetSharedCpuSttPipeline call builds a new one. Game thread. For the "destroyed mid-call" test, which must run last.
+	 */
+	void ReleaseSharedCpuSttPipeline();
+
+	/** Loads (and caches) long_goldens.json. False + OutError naming the path and Tools/make_stt_long_goldens.py. Any thread. */
+	bool LoadSttLongGoldens(const FSttLongGoldens*& OutGoldens, FString& OutError);
+
+	/** The 16 kHz mono samples of a long recording (num_samples float32). False + OutError (path + generator command). Any thread. */
+	bool LoadLongAudio(const FSttLongGoldens& G, const FSttLongRecording& Rec, TArray<float>& OutSamples, FString& OutError);
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

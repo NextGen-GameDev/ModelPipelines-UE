@@ -305,7 +305,7 @@ namespace SpeechAsyncSpecPrivate
 		}
 		else
 		{
-			In.Samples.SetNumZeroed(36 * 16000);
+			In.Samples.SetNumZeroed(600 * 16000 + 16000);   // 601 s: over the C77a limit
 		}
 		const TStrongObjectPtr<USpeechAsyncActionTestReceiver> R = NewReceiver();
 		UCancellableAsyncAction* A = NewAction(K, P, In, R.Get());   // wave kind + tiny pipeline: null Sound

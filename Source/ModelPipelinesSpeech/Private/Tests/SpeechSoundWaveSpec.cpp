@@ -314,7 +314,7 @@ namespace SpeechSoundWaveSpecPrivate
 		{
 		case EErr::NullSound: return TEXT("NullSoundFailsInvalidArgument");
 		case EErr::Procedural: return TEXT("ProceduralWaveFailsInvalidArgument");
-		case EErr::TooLong: return TEXT("Generated36sWaveFailsBeforeDecodeWithAtMost35s");
+		case EErr::TooLong: return TEXT("Generated601sWaveFailsBeforeDecodeWithAtMost600s");
 		case EErr::Blank: return TEXT("BlankWaveFailsPreprocessFailed");
 		default: return TEXT("PipelineNotReadyFailsInvalidArgument");
 		}
@@ -350,11 +350,11 @@ namespace SpeechSoundWaveSpecPrivate
 			break;
 		case EErr::TooLong:
 		{
-			// 36 s of silence: a decode-first implementation would just answer with an empty success, so only the length check can fail it.
+			// 601 s of silence (WP9S.5c2 limit 600 s): a decode-first implementation would just answer with an empty success, so only the length check can fail it.
 			TArray<int16> Silence;
-			Silence.SetNumZeroed(36 * 16000);
+			Silence.SetNumZeroed(601 * 16000);
 			Keep.Reset(MakeGeneratedSoundWave(Silence, 16000, 1));
-			Needle = TEXT("at most 35 s");
+			Needle = TEXT("at most 600 s");
 			break;
 		}
 		case EErr::Blank:

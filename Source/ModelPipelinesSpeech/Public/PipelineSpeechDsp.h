@@ -36,6 +36,20 @@ MODELPIPELINESSPEECH_API float ComputeRmsDbfs(TConstArrayView<float> Samples);
 /** Number of valid feature frames for N samples: N / HopLength (integer division). N <= 0 (or HopLength <= 0) -> 0. */
 MODELPIPELINESSPEECH_API int32 NumValidFrames(int32 NumSamples, const FPipelineSpeechSettings& Settings);
 
+/** One long-audio window (C77): [Start, End) in samples of the 16 kHz mono signal. */
+struct FSpeechWindow
+{
+	int32 Start = 0;
+	int32 End = 0;
+};
+
+/**
+ * C77 plan. SampleRate is the signal's rate (16000 in practice; MIN/MAX/TAIL scale with it, H = 160 fixed).
+ * Empty input -> zero windows; N <= MAX -> one window [0, N). Otherwise cuts at the quietest 200 ms (float64 prefix sums of
+ * x^2, earliest minimum) between start + 25 s and start + min(35 s, remaining - 5 s). Never fails.
+ */
+MODELPIPELINESSPEECH_API void PlanSpeechWindows(TConstArrayView<float> Mono, int32 SampleRate, TArray<FSpeechWindow>& OutWindows);
+
 /**
  * ParakeetFeatureExtractor (batch 1, unpadded): pre-emphasis, centred STFT with a symmetric Hann window, power spectrum,
  * slaney mel filterbank (librosa), log(mel + 2^-24), per-bin mean/variance normalisation over the valid frames.

@@ -498,7 +498,7 @@ namespace SpeechPipelineSpecPrivate
 
 	enum class EErrCase : int32
 	{
-		Rate999, Rate384001, ZeroChannels, NegativeChannels, RaggedLength, OneNaN, MixedNonFinite, Over35s, Over35sStereo44k, NotReady, Count
+		Rate999, Rate384001, ZeroChannels, NegativeChannels, RaggedLength, OneNaN, MixedNonFinite, Over600s, Over600sStereo44k, NotReady, Count
 	};
 
 	static const TCHAR* ErrCaseName(EErrCase C)
@@ -512,8 +512,8 @@ namespace SpeechPipelineSpecPrivate
 		case EErrCase::RaggedLength: return TEXT("RaggedLength");
 		case EErrCase::OneNaN: return TEXT("OneNaN");
 		case EErrCase::MixedNonFinite: return TEXT("ThreeNonFinite");
-		case EErrCase::Over35s: return TEXT("Over35s");
-		case EErrCase::Over35sStereo44k: return TEXT("Over35sStereo44k");
+		case EErrCase::Over600s: return TEXT("Over600s");
+		case EErrCase::Over600sStereo44k: return TEXT("Over600sStereo44k");
 		case EErrCase::NotReady: return TEXT("NotReady");
 		default: return TEXT("?");
 		}
@@ -539,8 +539,8 @@ namespace SpeechPipelineSpecPrivate
 			Samples[30] = -std::numeric_limits<float>::infinity();
 			AnyOf = { TEXT("3 non-finite") };
 			break;
-		case EErrCase::Over35s: Samples.Init(0.f, 568000); AnyOf = { TEXT("35") }; break;   // 35.5 s at 16 kHz mono
-		case EErrCase::Over35sStereo44k: Rate = 44100; Channels = 2; Samples.Init(0.f, (int32)(35.5 * 44100.0) * 2); AnyOf = { TEXT("35") }; break;
+		case EErrCase::Over600s: Samples.Init(0.f, 9600001); AnyOf = { TEXT("at most 600 s") }; break;   // 600 s + 1 frame at 16 kHz mono (WP9S.5c2 limit)
+		case EErrCase::Over600sStereo44k: Rate = 44100; Channels = 2; Samples.Init(0.f, (int32)(600.5 * 44100.0) * 2); AnyOf = { TEXT("at most 600 s") }; break;   // 600.5 s stereo
 		case EErrCase::NotReady: AnyOf.Reset(); break;
 		default: break;
 		}
@@ -763,22 +763,24 @@ void FSpeechToTextPipelineSpec::Define()
 
 		LatentIt("AcceptedBoundaries", LatentLimit, [this](const FDoneDelegate& Done)
 		{
-			// Exactly 35.0 s (cap is "> 35.0 s"), rate 1000 and rate 384000 are accepted. Zero samples: the silence gate answers
+			// WP9S.5c2: the cap is now "> 600 s". Exactly 35.0 s (formerly the cap, now one window), exactly 600.0 s, rate 1000 and rate 384000 are accepted. Zero samples: the silence gate answers
 			// with an empty success and no inference. An off-by-one cap or range rejects one of them with InvalidArgument.
 			USpeechToTextPipeline* P = GetTinyPipeline(*this);
 			if (!P) { Done.ExecuteIfBound(); return; }
 			TArray<TSharedRef<FCallState>> Calls;
-			for (int32 k = 0; k < 3; ++k) { Calls.Add(MakeShared<FCallState>()); }
+			for (int32 k = 0; k < 4; ++k) { Calls.Add(MakeShared<FCallState>()); }
 			TArray<float> A; A.Init(0.f, 560000);
 			Issue(P, MoveTemp(A), 16000, 1, Calls[0]);
 			TArray<float> B; B.Init(0.f, 1000);
 			Issue(P, MoveTemp(B), 1000, 1, Calls[1]);
 			TArray<float> D; D.Init(0.f, 384000);
 			Issue(P, MoveTemp(D), 384000, 1, Calls[2]);
+			TArray<float> E; E.Init(0.f, 9600000);   // exactly 600.0 s: accepted (silence gate answers)
+			Issue(P, MoveTemp(E), 16000, 1, Calls[3]);
 			WaitCalls(this, Calls, Done, [this, Calls]()
 			{
-				const TCHAR* Names[3] = { TEXT("35.0 s at 16 kHz"), TEXT("rate 1000"), TEXT("rate 384000") };
-				for (int32 k = 0; k < 3; ++k)
+				const TCHAR* Names[4] = { TEXT("35.0 s at 16 kHz"), TEXT("rate 1000"), TEXT("rate 384000"), TEXT("600.0 s at 16 kHz") };
+				for (int32 k = 0; k < 4; ++k)
 				{
 					TestTrue(*FString::Printf(TEXT("%s: success (%s)"), Names[k], *Calls[k]->Result.Message), Calls[k]->Result.bSuccess);
 					TestTrue(*FString::Printf(TEXT("%s: empty transcript"), Names[k]), Calls[k]->Transcript.Text.IsEmpty());

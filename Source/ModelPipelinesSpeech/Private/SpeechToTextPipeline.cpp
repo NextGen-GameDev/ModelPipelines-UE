@@ -44,7 +44,23 @@ namespace UE::ModelPipelines::Speech
 		FSpeechStatePtr State;
 		FOnSpeechTranscribed OnDone;
 
-		/** Front end output. bGated: answered without inference (silence or too short). */
+		/** Async calls: starts the current window's encoder on the pipeline; false when the pipeline was destroyed. Holds a
+		    weak pointer only (made inside USpeechToTextPipeline::Transcribe, which may call the private StartEncoder). */
+		TFunction<bool(const TSharedRef<FSpeechCall, ESPMode::ThreadSafe>&)> StartEncoderFn;
+
+		/** C77: the 16 kHz mono signal of the whole call and its windows; WindowIndex is the window being processed. */
+		TArray<float> Mono;
+		TArray<FSpeechWindow> Windows;
+		int32 WindowIndex = 0;
+
+		/** C77a stitching state (non-empty trimmed window texts, global words, summed inference time). */
+		TArray<FString> WindowTexts;
+		TArray<FSpeechWord> Words;
+		double TotalInferenceMs = 0.0;
+		bool bAnyWindowRan = false;
+		FPipelineResult LastWindowResult;
+
+		/** Front end output of the current window. bGated: answered without inference (silence or too short). */
 		bool bGated = false;
 		FSpeechFeatures Features;
 
@@ -66,7 +82,7 @@ namespace UE::ModelPipelines::Speech
 
 	namespace PipelinePrivate
 	{
-		constexpr double MaxSecondsPerCall = 35.0;
+		constexpr double MaxSecondsPerCall = 600.0;
 		constexpr TCHAR WordStartMarker = TCHAR(0x2581);
 
 		/** C75 step 1 checks, in order, except the non-finite scan (O(N); runs first in RunFrontEnd). Ok() when the call may run. */
@@ -96,7 +112,7 @@ namespace UE::ModelPipelines::Speech
 			if (Seconds > MaxSecondsPerCall)
 			{
 				return FPipelineResult::Fail(EPipelineError::InvalidArgument,
-					FString::Printf(TEXT("audio is %.2f s; at most 35 s per call until long-audio support"), Seconds));
+					FString::Printf(TEXT("audio is %.2f s; at most 600 s per call"), Seconds));
 			}
 			return FPipelineResult::Ok();
 		}
@@ -153,22 +169,55 @@ namespace UE::ModelPipelines::Speech
 			}
 			Mono.Empty();
 
+			// C77: plan the windows on the 16 kHz mono signal (one window [0, N) up to 35 s; none for an empty signal).
+			Call.Mono = MoveTemp(Resampled);
+			PlanSpeechWindows(Call.Mono, Call.Speech.SampleRate, Call.Windows);
+			Call.WindowIndex = 0;
+			return FPipelineResult::Ok();
+		}
+
+		/** C75 step 2 tail for the current window (any thread): its own silence gate and log-mel. Sets bGated or Features. */
+		static FPipelineResult PrepareWindow(FSpeechCall& Call)
+		{
+			Call.bGated = false;
+			Call.Features = FSpeechFeatures();
+			Call.Encoder.Empty();
+			Call.NumFrames = 0;
+			Call.EncoderDim = 0;
+			if (!Call.Windows.IsValidIndex(Call.WindowIndex))
+			{
+				return FPipelineResult::Fail(EPipelineError::Internal, TEXT("window index out of range"));
+			}
+			const FSpeechWindow& W = Call.Windows[Call.WindowIndex];
+			const TConstArrayView<float> Samples(Call.Mono.GetData() + W.Start, W.End - W.Start);
+
 			const bool bGateOn = Call.Speech.SilenceThresholdDb > -100.f;
-			if (bGateOn && ComputeRmsDbfs(Resampled) < Call.Speech.SilenceThresholdDb)
+			if (bGateOn && ComputeRmsDbfs(Samples) < Call.Speech.SilenceThresholdDb)
 			{
 				Call.bGated = true;
 				return FPipelineResult::Ok();
 			}
-			if (NumValidFrames(Resampled.Num(), Call.Speech) < 2)
+			if (NumValidFrames(Samples.Num(), Call.Speech) < 2)
 			{
 				Call.bGated = true;
 				return FPipelineResult::Ok();
 			}
-			if (!Call.State->Extractor->Extract(Resampled, Call.Features, Err))
+			FString Err;
+			if (!Call.State->Extractor->Extract(Samples, Call.Features, Err))
 			{
 				return FPipelineResult::Fail(EPipelineError::PreprocessFailed, FString::Printf(TEXT("feature extraction failed: %s"), *Err));
 			}
 			return FPipelineResult::Ok();
+		}
+
+		/** C77a: "window k/n: " prefix on a failing window of a multi-window call (single-window calls are unchanged). */
+		static FPipelineResult WindowFailure(const FSpeechCall& Call, FPipelineResult R)
+		{
+			if (Call.Windows.Num() > 1)
+			{
+				R.Message = FString::Printf(TEXT("window %d/%d: %s"), Call.WindowIndex + 1, Call.Windows.Num(), *R.Message);
+			}
+			return R;
 		}
 
 		/** C75 step 3: the encoder stages (Complete is set by the caller for async calls). */
@@ -248,6 +297,9 @@ namespace UE::ModelPipelines::Speech
 			}
 			const FPipelineSpeechSettings& S = Call.Speech;
 			const double FrameSec = (double)S.SubsamplingFactor * (double)S.HopLength / (double)FMath::Max(1, S.SampleRate);
+			// C77a: global times = window-local + window start / R (0 for a single window: unchanged).
+			const double WindowOffsetSec = Call.Windows.IsValidIndex(Call.WindowIndex)
+				? (double)Call.Windows[Call.WindowIndex].Start / (double)FMath::Max(1, S.SampleRate) : 0.0;
 
 			const TArray<FSpeechDecodeStep>& Steps = Session.GetSteps();
 			TArray<FSpeechDecodeStep> Emitted;
@@ -299,8 +351,8 @@ namespace UE::ModelPipelines::Speech
 				{
 					FSpeechWord& W = Out.Words.AddDefaulted_GetRef();
 					W.Word = MoveTemp(WordText);
-					W.StartSeconds = (float)(Emitted[WordBegin].Frame * FrameSec);
-					W.EndSeconds = (float)((Emitted[i - 1].Frame + Emitted[i - 1].Duration) * FrameSec);
+					W.StartSeconds = (float)((double)Emitted[WordBegin].Frame * FrameSec + WindowOffsetSec);
+					W.EndSeconds = (float)((double)(Emitted[i - 1].Frame + Emitted[i - 1].Duration) * FrameSec + WindowOffsetSec);
 				}
 				WordBegin = i;
 			}
@@ -351,19 +403,93 @@ namespace UE::ModelPipelines::Speech
 			});
 		}
 
-		/** Game thread: encoder Complete -> decode session on the executor -> Finalize -> OnDone. */
+		/** C77a: adds one decoded window to the stitched result. */
+		static void AccumulateWindow(FSpeechCall& Call, const FPipelineResult& WindowResult, FSpeechTranscript&& WindowTranscript)
+		{
+			Call.bAnyWindowRan = true;
+			Call.LastWindowResult = WindowResult;
+			Call.TotalInferenceMs += (double)WindowResult.InferenceMs;
+			FString Text = WindowTranscript.Text.TrimStartAndEnd();
+			if (!Text.IsEmpty())
+			{
+				Call.WindowTexts.Add(MoveTemp(Text));
+			}
+			Call.Words.Append(MoveTemp(WindowTranscript.Words));
+		}
+
+		/** C77a: the stitched result once every window is done. No window ran -> success, empty, InferenceMs 0. */
+		static FPipelineResult BuildFinal(FSpeechCall& Call, FSpeechTranscript& Out)
+		{
+			Out = EmptyTranscript(Call);
+			Call.Mono.Empty();
+			if (!Call.bAnyWindowRan)
+			{
+				return FPipelineResult::Ok();
+			}
+			FPipelineResult R = Call.LastWindowResult;
+			R.InferenceMs = (float)Call.TotalInferenceMs;
+			Out.Text = FString::Join(Call.WindowTexts, TEXT(" "));
+			Out.Words = MoveTemp(Call.Words);
+			Out.InferenceMs = R.InferenceMs;
+			return R;
+		}
+
+		static void ProcessNextWindow(const FSpeechCallRef& Call);
+
+		/** Game thread, after the current window's front end ran: gated -> next window, else that window's encoder. */
+		static void OnWindowFrontEndDone(const FSpeechCallRef& Call, const FPipelineResult& FrontEnd)
+		{
+			if (!FrontEnd.bSuccess)
+			{
+				DeliverFailure(*Call, WindowFailure(*Call, FrontEnd));
+				return;
+			}
+			if (Call->bGated)
+			{
+				++Call->WindowIndex;
+				ProcessNextWindow(Call);
+				return;
+			}
+			if (!Call->StartEncoderFn || !Call->StartEncoderFn(Call))
+			{
+				DeliverFailure(*Call, WindowFailure(*Call,
+					FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the pipeline was destroyed before inference"))));
+			}
+		}
+
+		/** Game thread: front end of the next window on a worker, or the stitched result when every window is done. */
+		static void ProcessNextWindow(const FSpeechCallRef& Call)
+		{
+			if (!Call->Windows.IsValidIndex(Call->WindowIndex))
+			{
+				FSpeechTranscript Transcript;
+				const FPipelineResult Final = BuildFinal(*Call, Transcript);
+				Deliver(*Call, Final, Transcript);
+				return;
+			}
+			UE::Tasks::Launch(TEXT("ModelPipelinesSpeechWindow"), [Call = FSpeechCallRef(Call)]() mutable
+			{
+				const FPipelineResult FrontEnd = PrepareWindow(*Call);
+				AsyncTask(ENamedThreads::GameThread, [Call = MoveTemp(Call), FrontEnd]()
+				{
+					OnWindowFrontEndDone(Call, FrontEnd);
+				});
+			});
+		}
+
+		/** Game thread: encoder Complete -> decode session on the executor -> Finalize -> next window (OnDone after the last). */
 		static void OnEncoderComplete(const FSpeechCallRef& Call, const FPipelineResult& Result)
 		{
 			if (!Result.bSuccess)
 			{
-				DeliverFailure(*Call, Result);
+				DeliverFailure(*Call, WindowFailure(*Call, Result));
 				return;
 			}
 			Call->EncoderResult = Result;
 			const TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> Executor = FPipelineExecutor::TryGetShared();
 			if (!Executor.IsValid())
 			{
-				DeliverFailure(*Call, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the executor has shut down")));
+				DeliverFailure(*Call, WindowFailure(*Call, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the executor has shut down"))));
 				return;
 			}
 			const TSharedRef<FSpeechDecodeSession, ESPMode::ThreadSafe> Session = MakeSession(*Call);
@@ -372,18 +498,25 @@ namespace UE::ModelPipelines::Speech
 			{
 				if (!DecodeResult.bSuccess)
 				{
-					DeliverFailure(*Call, DecodeResult);
+					DeliverFailure(*Call, WindowFailure(*Call, DecodeResult));
 					return;
 				}
 				FSpeechTranscript Transcript;
-				const FPipelineResult Final = Finalize(*Call, *Session, Transcript);
-				Deliver(*Call, Final, Transcript);
+				const FPipelineResult WindowResult = Finalize(*Call, *Session, Transcript);
+				if (!WindowResult.bSuccess)
+				{
+					DeliverFailure(*Call, WindowFailure(*Call, WindowResult));
+					return;
+				}
+				AccumulateWindow(*Call, WindowResult, MoveTemp(Transcript));
+				++Call->WindowIndex;
+				ProcessNextWindow(Call);
 			};
 			// No Owner: the call must complete even when the pipeline is destroyed meanwhile (C75).
 			const FPipelineJobId Id = Executor->EnqueueSession(Session, MoveTemp(Callbacks), nullptr);
 			if (Id == 0)
 			{
-				DeliverFailure(*Call, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the executor has shut down")));
+				DeliverFailure(*Call, WindowFailure(*Call, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the executor has shut down"))));
 			}
 		}
 	}
@@ -502,28 +635,38 @@ void USpeechToTextPipeline::Transcribe(TArray<float> Samples, int32 SampleRate, 
 	}
 
 	TWeakObjectPtr<USpeechToTextPipeline> WeakThis(this);
-	UE::Tasks::Launch(TEXT("ModelPipelinesSpeechFrontEnd"), [Call = FSpeechCallRef(Call), WeakThis]() mutable
+	Call->StartEncoderFn = [WeakThis](const FSpeechCallRef& WindowCall) -> bool
 	{
-		const FPipelineResult FrontEnd = RunFrontEnd(*Call);
-		AsyncTask(ENamedThreads::GameThread, [Call = MoveTemp(Call), WeakThis, FrontEnd]()
+		USpeechToTextPipeline* Pipeline = WeakThis.Get();
+		if (!Pipeline)
 		{
-			if (!FrontEnd.bSuccess)
+			return false;
+		}
+		Pipeline->StartEncoder(WindowCall);
+		return true;
+	};
+	// Whole-call front end (scan, mono, resample, window plan) and the first window's gate + features in one worker task.
+	UE::Tasks::Launch(TEXT("ModelPipelinesSpeechFrontEnd"), [Call = FSpeechCallRef(Call)]() mutable
+	{
+		FPipelineResult FrontEnd = RunFrontEnd(*Call);
+		const bool bHasWindow = FrontEnd.bSuccess && Call->Windows.Num() > 0;
+		if (bHasWindow)
+		{
+			FrontEnd = PrepareWindow(*Call);
+		}
+		AsyncTask(ENamedThreads::GameThread, [Call = MoveTemp(Call), FrontEnd, bHasWindow]()
+		{
+			if (!FrontEnd.bSuccess && !bHasWindow)
 			{
 				DeliverFailure(*Call, FrontEnd);
 				return;
 			}
-			if (Call->bGated)
+			if (!bHasWindow)
 			{
-				Deliver(*Call, FPipelineResult::Ok(), EmptyTranscript(*Call));
+				ProcessNextWindow(Call);   // no window (signal resampled to nothing): empty success
 				return;
 			}
-			USpeechToTextPipeline* Pipeline = WeakThis.Get();
-			if (!Pipeline)
-			{
-				DeliverFailure(*Call, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the pipeline was destroyed before inference")));
-				return;
-			}
-			Pipeline->StartEncoder(Call);
+			OnWindowFrontEndDone(Call, FrontEnd);
 		});
 	});
 }
@@ -565,7 +708,7 @@ void USpeechToTextPipeline::TranscribeSoundWave(USoundWave* Sound, FOnSpeechTran
 	else if ((double)Sound->Duration > MaxSecondsPerCall)
 	{
 		Check = FPipelineResult::Fail(EPipelineError::InvalidArgument,
-			FString::Printf(TEXT("sound wave '%s' is %.2f s; at most 35 s per call until long-audio support"), *Sound->GetName(), Sound->Duration));
+			FString::Printf(TEXT("sound wave '%s' is %.2f s; at most 600 s per call"), *Sound->GetName(), Sound->Duration));
 	}
 	if (!Check.bSuccess)
 	{
@@ -647,33 +790,49 @@ FPipelineResult USpeechToTextPipeline::TranscribeBlocking(TConstArrayView<float>
 	{
 		return FrontEnd;
 	}
-	if (Call->bGated)
+
+	// C77: the windows one after another; each window's features / encoder output are freed before the next.
+	for (Call->WindowIndex = 0; Call->WindowIndex < Call->Windows.Num(); ++Call->WindowIndex)
 	{
-		Out = EmptyTranscript(*Call);
-		return FPipelineResult::Ok();
+		const FPipelineResult Prep = PrepareWindow(*Call);
+		if (!Prep.bSuccess)
+		{
+			return WindowFailure(*Call, Prep);
+		}
+		if (Call->bGated)
+		{
+			continue;
+		}
+		const FPipelineResult Enc = RunStagesBlocking(MakeEncoderStages(Call));
+		if (!Enc.bSuccess)
+		{
+			return WindowFailure(*Call, Enc);
+		}
+		Call->EncoderResult = Enc;
+
+		const TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> Executor = FPipelineExecutor::TryGetShared();
+		if (!Executor.IsValid())
+		{
+			return WindowFailure(*Call, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the executor has shut down")));
+		}
+		const TSharedRef<FSpeechDecodeSession, ESPMode::ThreadSafe> Session = MakeSession(*Call);
+		TArray<FPipelineSessionProgress> Progress;
+		const FPipelineResult Dec = Executor->RunSessionBlocking(Session, Progress);
+		if (!Dec.bSuccess)
+		{
+			return WindowFailure(*Call, Dec);
+		}
+		FSpeechTranscript WindowTranscript;
+		const FPipelineResult WindowResult = Finalize(*Call, *Session, WindowTranscript);
+		if (!WindowResult.bSuccess)
+		{
+			return WindowFailure(*Call, WindowResult);
+		}
+		AccumulateWindow(*Call, WindowResult, MoveTemp(WindowTranscript));
 	}
 
-	const FPipelineResult Enc = RunStagesBlocking(MakeEncoderStages(Call));
-	if (!Enc.bSuccess)
-	{
-		return Enc;
-	}
-	Call->EncoderResult = Enc;
-
-	const TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> Executor = FPipelineExecutor::TryGetShared();
-	if (!Executor.IsValid())
-	{
-		return FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the executor has shut down"));
-	}
-	const TSharedRef<FSpeechDecodeSession, ESPMode::ThreadSafe> Session = MakeSession(*Call);
-	TArray<FPipelineSessionProgress> Progress;
-	const FPipelineResult Dec = Executor->RunSessionBlocking(Session, Progress);
-	if (!Dec.bSuccess)
-	{
-		return Dec;
-	}
 	FSpeechTranscript Transcript;
-	const FPipelineResult Final = Finalize(*Call, *Session, Transcript);
+	const FPipelineResult Final = BuildFinal(*Call, Transcript);
 	if (Final.bSuccess)
 	{
 		Out = MoveTemp(Transcript);

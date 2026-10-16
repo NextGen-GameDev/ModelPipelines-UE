@@ -620,3 +620,78 @@ bool FLogMelExtractor::Extract(TConstArrayView<float> Samples, FSpeechFeatures& 
 	return true;
 }
 }
+
+namespace UE::ModelPipelines::Speech
+{
+// C77 cut positions must match numpy bit for bit: no FMA contraction or reassociation of the prefix sum under /fp:fast.
+#if defined(_MSC_VER)
+#pragma float_control(precise, on, push)
+#endif
+void PlanSpeechWindows(TConstArrayView<float> Mono, int32 SampleRate, TArray<FSpeechWindow>& OutWindows)
+{
+	OutWindows.Reset();
+	const int64 N = Mono.Num();
+	if (N <= 0)
+	{
+		return;
+	}
+	constexpr int64 H = 160;
+	constexpr int64 Half = 10;
+	const int64 R = FMath::Max(SampleRate, 0);
+	const int64 MaxLen = 35 * R;
+	const int64 MinLen = 25 * R;
+	const int64 TailLen = 5 * R;
+
+	int64 Start = 0;
+	if (R > 0 && N > MaxLen)
+	{
+		// P[k+1] = P[k] + (double)x[k]^2, strictly sequential (np.cumsum in the reference). S(i) only reads P at multiples
+		// of H, so only those are kept: Q[j] = P[H*j] (same values, N/H doubles instead of N).
+		const int64 NumQ = N / H + 1;
+		TArray64<double> Q;
+		Q.SetNumUninitialized(NumQ);
+		Q[0] = 0.0;
+		double Acc = 0.0;
+		for (int32 k = 0; k < Mono.Num(); ++k)
+		{
+			const double X = (double)Mono[k];
+			Acc += X * X;
+			if (((int64)k + 1) % H == 0)
+			{
+				Q[((int64)k + 1) / H] = Acc;
+			}
+		}
+		while (N - Start > MaxLen)
+		{
+			const int64 Lo = Start + MinLen;
+			const int64 Hi = Start + FMath::Min(MaxLen, (N - Start) - TailLen);
+			const int64 I0 = (Lo + H - 1) / H;   // ceil (Lo > 0)
+			const int64 I1 = Hi / H;             // floor
+			int64 Cut = Lo;                      // no candidate (absurdly low rates only): plain cut, still progresses
+			if (I1 >= I0)
+			{
+				int64 BestI = I0;
+				double Best = 0.0;
+				for (int64 i = I0; i <= I1; ++i)
+				{
+					const int64 A = i + Half;
+					const int64 B = i - Half;
+					const double S = (A < NumQ && B >= 0) ? Q[A] - Q[B] : TNumericLimits<double>::Max();
+					if (i == I0 || S < Best)
+					{
+						Best = S;
+						BestI = i;
+					}
+				}
+				Cut = H * BestI;
+			}
+			OutWindows.Add({ (int32)Start, (int32)Cut });
+			Start = Cut;
+		}
+	}
+	OutWindows.Add({ (int32)Start, (int32)N });
+}
+#if defined(_MSC_VER)
+#pragma float_control(pop)
+#endif
+}

@@ -7,7 +7,13 @@
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "HAL/PlatformMisc.h"
+#include "Misc/CoreDelegates.h"
 #include "Misc/FileHelper.h"
+#include "NNEModelData.h"
+#include "PipelineModelPackage.h"
+#include "UObject/Package.h"
+#include "UObject/StrongObjectPtr.h"
+#include "UObject/UObjectGlobals.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -97,6 +103,53 @@ namespace UE::ModelPipelines::SpeechTests
 					(*Log)->TryGetNumberField(TEXT("num_frames"), N);
 					C.LogmelFrames = (int32)N;
 				}
+				const TSharedPtr<FJsonObject>* Hf = nullptr;
+				if ((*O)->TryGetObjectField(TEXT("hf"), Hf))
+				{
+					(*Hf)->TryGetStringField(TEXT("text"), C.HfText);
+				}
+				const TSharedPtr<FJsonObject>* Onnx = nullptr;
+				if ((*O)->TryGetObjectField(TEXT("onnx"), Onnx))
+				{
+					C.bHasOnnx = (*Onnx)->TryGetStringField(TEXT("text"), C.OnnxText);
+					const TArray<TSharedPtr<FJsonValue>>* Steps = nullptr;
+					if ((*Onnx)->TryGetArrayField(TEXT("steps"), Steps))
+					{
+						for (const TSharedPtr<FJsonValue>& S : *Steps)
+						{
+							const TArray<TSharedPtr<FJsonValue>>* Pair = nullptr;
+							if (S.IsValid() && S->TryGetArray(Pair) && Pair->Num() == 2)
+							{
+								C.StepTokens.Add((int32)(*Pair)[0]->AsNumber());
+								C.StepDurations.Add((int32)(*Pair)[1]->AsNumber());
+							}
+						}
+					}
+					const TArray<TSharedPtr<FJsonValue>>* Ids = nullptr;
+					if ((*Onnx)->TryGetArrayField(TEXT("token_ids"), Ids))
+					{
+						for (const TSharedPtr<FJsonValue>& I : *Ids)
+						{
+							C.TokenIds.Add((int32)I->AsNumber());
+						}
+					}
+					const TArray<TSharedPtr<FJsonValue>>* Words = nullptr;
+					if ((*Onnx)->TryGetArrayField(TEXT("word_frames"), Words))
+					{
+						for (const TSharedPtr<FJsonValue>& W : *Words)
+						{
+							const TArray<TSharedPtr<FJsonValue>>* Triple = nullptr;
+							if (W.IsValid() && W->TryGetArray(Triple) && Triple->Num() == 3)
+							{
+								FSttGoldWord GW;
+								GW.Word = (*Triple)[0]->AsString();
+								GW.StartFrame = (int32)(*Triple)[1]->AsNumber();
+								GW.EndFrame = (int32)(*Triple)[2]->AsNumber();
+								C.Words.Add(MoveTemp(GW));
+							}
+						}
+					}
+				}
 				Out.Clips.Add(MoveTemp(C));
 			}
 			if (Out.Clips.Num() == 0)
@@ -121,6 +174,19 @@ namespace UE::ModelPipelines::SpeechTests
 	const FSttClip* FSttGoldens::Find(const FString& Id) const
 	{
 		return Clips.FindByPredicate([&Id](const FSttClip& C) { return C.Id == Id; });
+	}
+
+	TArray<const FSttClip*> FSttGoldens::VisibleClips() const
+	{
+		TArray<const FSttClip*> Out;
+		for (const FSttClip& C : Clips)
+		{
+			if (!C.bSynthetic)
+			{
+				Out.Add(&C);
+			}
+		}
+		return Out;
 	}
 
 	bool LoadSttGoldens(const FSttGoldens*& OutGoldens, FString& OutError)
@@ -165,6 +231,159 @@ namespace UE::ModelPipelines::SpeechTests
 		{
 			FMemory::Memcpy(OutData.GetData(), Bytes.GetData(), Bytes.Num());
 		}
+		return true;
+	}
+
+	bool LoadClipAudio(const FSttGoldens& G, const FSttClip& Clip, TArray<float>& OutSamples, FString& OutError)
+	{
+		return LoadFloatFile(G, Clip.AudioFile, Clip.NumSamples, OutSamples, OutError);
+	}
+
+	bool IsGpuRequired()
+	{
+		return FPlatformMisc::GetEnvironmentVariable(TEXT("MODELPIPELINES_REQUIRE_GPU")) == TEXT("1");
+	}
+
+	FString GetPhononModelDir()
+	{
+		return GetDevDir() / TEXT("models/stt/phonon-2-onnx/fp16w");
+	}
+
+	namespace
+	{
+		const TCHAR* const ModelFetchHint = TEXT("Fetch the Phonon-2 ONNX folder with: \"D:/Micromamba/micromambaenv/envs/pipelines/python.exe\" ModelPipelines-UE/Tools/export_phonon2_onnx.py (writes .pipelines-dev/models/stt/phonon-2-onnx/fp16w), and the tiny test graphs with ModelPipelines-UE/Tools/make_test_models.py");
+
+		struct FSharedPackages
+		{
+			TStrongObjectPtr<UPipelineModelPackage> Phonon;
+			TStrongObjectPtr<UPipelineModelPackage> Tiny;
+		};
+
+		FSharedPackages* GShared = nullptr; // heap, never deleted: the strong refs are released at OnEnginePreExit
+		FDelegateHandle GPreExitHandle;
+
+		FSharedPackages& Shared()
+		{
+			if (!GShared)
+			{
+				GShared = new FSharedPackages();
+				GPreExitHandle = FCoreDelegates::OnEnginePreExit.AddLambda([]()
+				{
+					if (GShared)
+					{
+						GShared->Phonon.Reset();
+						GShared->Tiny.Reset();
+					}
+				});
+			}
+			return *GShared;
+		}
+
+		void FillCommon(UPipelineModelPackage& Pkg, const FString& TokenizerText)
+		{
+			Pkg.Task = EPipelineTask::SpeechToText;
+			Pkg.TokenizerJson = TokenizerText;
+			Pkg.License.SpdxId = TEXT("cc-by-4.0");
+			Pkg.License.SourceUrl = TEXT("https://huggingface.co/FermionResearch/Phonon-2");
+			Pkg.License.Attribution = TEXT("Phonon-2 by Fermion Research, based on NVIDIA parakeet-tdt-0.6b-v3");
+			// Pkg.Speech keeps the defaults (16000 Hz, 128 mel bins, ...).
+		}
+	}
+
+	UNNEModelData* LoadTestModelData(const FString& FileName, FString& OutError)
+	{
+		const FString Path = GetDevDir() / TEXT("models/test") / FileName;
+		TArray<uint8> Bytes;
+		if (!FFileHelper::LoadFileToArray(Bytes, *Path) || Bytes.Num() == 0)
+		{
+			OutError = FString::Printf(TEXT("Missing test model '%s'. %s"), *Path, ModelFetchHint);
+			return nullptr;
+		}
+		UNNEModelData* Data = NewObject<UNNEModelData>(GetTransientPackage());
+		Data->Init(TEXT("onnx"), TConstArrayView64<uint8>(Bytes.GetData(), (int64)Bytes.Num()));
+		return Data;
+	}
+
+	bool GetSharedPhononPackage(EPipelineDevice Device, UPipelineModelPackage*& OutPackage, FString& OutError)
+	{
+		OutPackage = nullptr;
+		FSharedPackages& S = Shared();
+		if (!S.Phonon.IsValid())
+		{
+			const FString Dir = GetPhononModelDir();
+			const FString EncPath = Dir / TEXT("encoder.onnx");
+			const FString DecPath = Dir / TEXT("decoder_joint.onnx");
+			const FString TokPath = Dir / TEXT("tokenizer.json");
+			FString TokText;
+			if (!FFileHelper::LoadFileToString(TokText, *TokPath) || TokText.IsEmpty())
+			{
+				OutError = FString::Printf(TEXT("Missing tokenizer '%s'. %s"), *TokPath, ModelFetchHint);
+				return false;
+			}
+			UNNEModelData* Dec = nullptr;
+			{
+				TArray<uint8> Bytes;
+				if (!FFileHelper::LoadFileToArray(Bytes, *DecPath) || Bytes.Num() == 0)
+				{
+					OutError = FString::Printf(TEXT("Missing decoder '%s'. %s"), *DecPath, ModelFetchHint);
+					return false;
+				}
+				Dec = NewObject<UNNEModelData>(GetTransientPackage());
+				Dec->Init(TEXT("onnx"), TConstArrayView64<uint8>(Bytes.GetData(), (int64)Bytes.Num()));
+			}
+			UNNEModelData* Enc = nullptr;
+			{
+				TArray<uint8> Bytes; // freed at the end of this scope, before the package is used
+				if (!FFileHelper::LoadFileToArray(Bytes, *EncPath) || Bytes.Num() == 0)
+				{
+					OutError = FString::Printf(TEXT("Missing encoder '%s'. %s"), *EncPath, ModelFetchHint);
+					return false;
+				}
+				Enc = NewObject<UNNEModelData>(GetTransientPackage());
+				Enc->Init(TEXT("onnx"), TConstArrayView64<uint8>(Bytes.GetData(), (int64)Bytes.Num()));
+			}
+			UPipelineModelPackage* Pkg = NewObject<UPipelineModelPackage>(GetTransientPackage());
+			Enc->Rename(nullptr, Pkg);
+			Dec->Rename(nullptr, Pkg);
+			Pkg->Model = Enc;
+			Pkg->DecoderModel = Dec;
+			FillCommon(*Pkg, TokText);
+			S.Phonon.Reset(Pkg);
+		}
+		S.Phonon->PreferredDevice = Device;
+		OutPackage = S.Phonon.Get();
+		return true;
+	}
+
+	bool GetSharedTinySttPackage(UPipelineModelPackage*& OutPackage, FString& OutError)
+	{
+		OutPackage = nullptr;
+		FSharedPackages& S = Shared();
+		if (!S.Tiny.IsValid())
+		{
+			const FString TokPath = GetPhononModelDir() / TEXT("tokenizer.json");
+			FString TokText;
+			if (!FFileHelper::LoadFileToString(TokText, *TokPath) || TokText.IsEmpty())
+			{
+				OutError = FString::Printf(TEXT("Missing tokenizer '%s'. %s"), *TokPath, ModelFetchHint);
+				return false;
+			}
+			UNNEModelData* Enc = LoadTestModelData(TEXT("tiny_stt_encoder.onnx"), OutError);
+			UNNEModelData* Dec = Enc ? LoadTestModelData(TEXT("tiny_stt_decoder_joint.onnx"), OutError) : nullptr;
+			if (!Enc || !Dec)
+			{
+				return false;
+			}
+			UPipelineModelPackage* Pkg = NewObject<UPipelineModelPackage>(GetTransientPackage());
+			Enc->Rename(nullptr, Pkg);
+			Dec->Rename(nullptr, Pkg);
+			Pkg->Model = Enc;
+			Pkg->DecoderModel = Dec;
+			FillCommon(*Pkg, TokText);
+			Pkg->PreferredDevice = EPipelineDevice::CPU;
+			S.Tiny.Reset(Pkg);
+		}
+		OutPackage = S.Tiny.Get();
 		return true;
 	}
 }

@@ -5,11 +5,23 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "CoreMinimal.h"
+#include "PipelineTypes.h"
+
+class UPipelineModelPackage;
+class UNNEModelData;
 
 namespace UE::ModelPipelines::SpeechTests
 {
 	/** env MODELPIPELINES_DEV_DIR, else <ProjectDir>/../.pipelines-dev (absolute). */
 	FString GetDevDir();
+
+	/** One onnx.word_frames entry: word text and start/end in encoder frames (seconds = frames * 0.08 at the default settings). */
+	struct FSttGoldWord
+	{
+		FString Word;
+		int32 StartFrame = 0;
+		int32 EndFrame = 0;
+	};
 
 	/** One entry of stt_goldens.json "clips" (schema stt-goldens/1, contract C71). File fields are relative to <dev>/goldens/stt. */
 	struct FSttClip
@@ -26,6 +38,15 @@ namespace UE::ModelPipelines::SpeechTests
 		bool bHasLogmel = false;
 		FString LogmelFile;
 		int32 LogmelFrames = 0;
+
+		// WP9S.5a: the "onnx" block (ONNX Runtime reference, greedy TDT loop) and hf.text. All clips of the file have it.
+		bool bHasOnnx = false;
+		FString OnnxText;               // onnx.text
+		FString HfText;                 // hf.text
+		TArray<int32> StepTokens;       // onnx.steps[i][0] (8192 = blank)
+		TArray<int32> StepDurations;    // onnx.steps[i][1]
+		TArray<int32> TokenIds;         // onnx.token_ids (non-blank k)
+		TArray<FSttGoldWord> Words;     // onnx.word_frames
 	};
 
 	struct FSttGoldens
@@ -37,6 +58,9 @@ namespace UE::ModelPipelines::SpeechTests
 		TArray<FSttClip> Clips;
 
 		const FSttClip* Find(const FString& Id) const;
+
+		/** The 40 visible LibriSpeech clips (kind != synthetic), in file order. */
+		TArray<const FSttClip*> VisibleClips() const;
 	};
 
 	/** Loads (and caches for the process) <dev>/goldens/stt/stt_goldens.json. False + OutError naming the path and Tools/make_stt_goldens.py. */
@@ -44,6 +68,35 @@ namespace UE::ModelPipelines::SpeechTests
 
 	/** Reads a raw little-endian float32 sidecar (path relative to the goldens dir). The byte size must equal ExpectedCount * 4. */
 	bool LoadFloatFile(const FSttGoldens& G, const FString& RelFile, int64 ExpectedCount, TArray<float>& OutData, FString& OutError);
+
+	// ---- WP9S.5a: model packages and clip audio (game thread only unless stated) ----
+
+	/** The 16 kHz mono float32 samples of a golden clip. False + OutError (path + generator command) when missing. Any thread. */
+	bool LoadClipAudio(const FSttGoldens& G, const FSttClip& Clip, TArray<float>& OutSamples, FString& OutError);
+
+	/** env MODELPIPELINES_REQUIRE_GPU == "1". */
+	bool IsGpuRequired();
+
+	/** <dev>/models/stt/phonon-2-onnx/fp16w. */
+	FString GetPhononModelDir();
+
+	/**
+	 * The Phonon-2 fp16w package (Task SpeechToText, Model = encoder.onnx, DecoderModel = decoder_joint.onnx, TokenizerJson,
+	 * default Speech settings, License cc-by-4.0), built ONCE per process (about 1.3 GB read, takes seconds) and kept alive
+	 * with a TStrongObjectPtr until the engine exits. PreferredDevice is set to Device on every call (a pipeline copies the
+	 * package at InitializeFromPackage, so create the pipeline right after this call). Game thread. False + OutError naming
+	 * the missing file and the fetch command.
+	 */
+	bool GetSharedPhononPackage(EPipelineDevice Device, UPipelineModelPackage*& OutPackage, FString& OutError);
+
+	/**
+	 * Tiny speech package for error-path tests (tiny_stt_encoder/decoder_joint, Phonon tokenizer.json, default Speech settings).
+	 * Cached once per process like the Phonon one. Not meant for real transcription (toy sizes).
+	 */
+	bool GetSharedTinySttPackage(UPipelineModelPackage*& OutPackage, FString& OutError);
+
+	/** A tiny .onnx from <dev>/models/test as a new UNNEModelData (outer = transient package). Game thread. */
+	UNNEModelData* LoadTestModelData(const FString& FileName, FString& OutError);
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

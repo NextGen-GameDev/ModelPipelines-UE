@@ -84,6 +84,10 @@ public:
 	    arguments or non-finite samples: the chunk is dropped and one Warning is logged (never a crash). After Stop: ignored. */
 	void PushAudio(TConstArrayView<float> Interleaved, int32 SampleRate, int32 NumChannels);
 
+	/** Blueprint form of PushAudio (C81c): feed game audio or voice chat into the stream. Same rules as PushAudio. */
+	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Speech", meta = (DisplayName = "Push Speech Audio"))
+	void PushAudioArray(const TArray<float>& Interleaved, int32 SampleRate = 16000, int32 NumChannels = 1);
+
 	/** Game thread. Finalises the current utterance (no hangover wait), then OnStopped. A second call does nothing. */
 	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Speech")
 	void Stop();

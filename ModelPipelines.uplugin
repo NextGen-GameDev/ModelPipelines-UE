@@ -68,6 +68,10 @@
 		{
 			"Name": "NNERuntimeORT",
 			"Enabled": true
+		},
+		{
+			"Name": "AudioCapture",
+			"Enabled": true
 		}
 	]
 }

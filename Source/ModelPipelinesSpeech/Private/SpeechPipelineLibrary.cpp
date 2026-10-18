@@ -8,6 +8,7 @@
 #include "PipelineModelPackage.h"
 #include "PipelineSpeechLog.h"
 #include "SpeechToTextPipeline.h"
+#include "SpeechListenAsyncAction.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SpeechPipelineLibrary)
 
@@ -35,4 +36,14 @@ USpeechToTextPipeline* USpeechPipelineLibrary::CreateSpeechToTextPipeline(UPipel
 	}
 	OutResult = FPipelineResult::Ok();
 	return Pipeline;
+}
+
+void USpeechPipelineLibrary::StopListening(USpeechListenAsyncAction* Listener)
+{
+	if (!Listener)
+	{
+		UE_LOG(LogModelPipelinesSpeech, Warning, TEXT("Stop Listening: Listener is null; nothing to stop"));
+		return;
+	}
+	Listener->Cancel();
 }

@@ -996,6 +996,11 @@ void USpeechStream::PushAudio(TConstArrayView<float> Interleaved, int32 SampleRa
 	}
 }
 
+void USpeechStream::PushAudioArray(const TArray<float>& Interleaved, int32 SampleRate, int32 NumChannels)
+{
+	PushAudio(TConstArrayView<float>(Interleaved), SampleRate, NumChannels);
+}
+
 void USpeechStream::Stop()
 {
 	if (Impl.IsValid() && !Impl->bStopRequested)

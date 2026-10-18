@@ -21,6 +21,9 @@
 #include "PipelineTensor.h"
 #include "PipelineEditorLog.h"
 #include "PipelineTokenizer.h"
+#include "PipelineSession.h"
+#include "SpeechEngine.h"
+#include "SpeechTypes.h"
 
 namespace PipelineModelValidatorPrivate
 {
@@ -596,6 +599,219 @@ namespace PipelineModelValidatorPrivate
 				*Path, *ActualSha, *ExpectedSha));
 		}
 	}
+
+	/** One ISpeechEngine::Transcribe of a fixed signal as a single-step executor session (every inference goes through the executor). */
+	class FPhononSmokeSession final : public IPipelineSession
+	{
+	public:
+		FPhononSmokeSession(TSharedPtr<IPipelineModel> InModel, TArray<float>&& InMono, int32 InSampleRate)
+			: Model(MoveTemp(InModel)), Mono(MoveTemp(InMono)), SampleRate(InSampleRate)
+		{
+		}
+
+		virtual TSharedPtr<IPipelineModel> GetModel() const override { return Model; }
+
+		virtual FPipelineResult Begin() override
+		{
+			if (!Model.IsValid())
+			{
+				return FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("no model"));
+			}
+			if (!Model->IsInitialized())
+			{
+				const FPipelineResult Init = Model->Initialize();
+				if (!Init.bSuccess)
+				{
+					return Init;
+				}
+			}
+			if (Model->AsSpeechEngine() == nullptr)
+			{
+				return FPipelineResult::Fail(EPipelineError::RuntimeUnavailable, TEXT("the model has no speech engine"));
+			}
+			return FPipelineResult::Ok();
+		}
+
+		virtual EPipelineStep Step(TArray<FPipelineSessionProgress>& OutProgress, FPipelineResult& OutResult) override
+		{
+			ISpeechEngine* Engine = Model.IsValid() ? Model->AsSpeechEngine() : nullptr;
+			if (Engine == nullptr)
+			{
+				OutResult = FPipelineResult::Fail(EPipelineError::RuntimeUnavailable, TEXT("the model has no speech engine"));
+				return EPipelineStep::Failed;
+			}
+			FSpeechTranscript Out;
+			FPipelineResult R = Engine->Transcribe(Mono, SampleRate, Out);
+			Mono.Empty();
+			if (!R.bSuccess)
+			{
+				if (R.Error == EPipelineError::None)
+				{
+					R.Error = EPipelineError::InferenceFailed;
+				}
+				OutResult = MoveTemp(R);
+				return EPipelineStep::Failed;
+			}
+			InferenceMs = Out.InferenceMs;
+			return EPipelineStep::Finished;
+		}
+
+		virtual void End(EPipelineSessionEnd Reason, FPipelineResult& OutFinal) override
+		{
+			Mono.Empty();
+			if (Reason == EPipelineSessionEnd::Finished)
+			{
+				OutFinal = FPipelineResult::Ok();
+				OutFinal.Device = EPipelineDevice::CPU;
+				OutFinal.InferenceMs = InferenceMs;
+			}
+		}
+
+	private:
+		TSharedPtr<IPipelineModel> Model;
+		TArray<float> Mono;
+		int32 SampleRate = 0;
+		float InferenceMs = 0.f;
+	};
+
+	/**
+	 * Phonon branch (C81b): weights folder holds weights.bin/weights.json/tokens.txt, weights.bin size and SHA-256 match the asset,
+	 * Content/Models is staged NonUFS; smoke (bRunSmokeTest): the Phonon backend prepares and initializes the model on CPU and
+	 * transcribes 1 s of a 440 Hz tone through the executor. Never modifies anything.
+	 */
+	static void ValidatePhonon(const UPipelineModelPackage& Package, const FPipelineValidateOptions& Options, FPipelineValidationReport& Report)
+	{
+		if (!IsModelsStagedNonUfs())
+		{
+			Report.Add(ESev::Warning, ECode::ModelsNotStagedNonUfs, TEXT(
+				"The project does not stage Content/Models as NonUFS, so a packaged game can't open the Phonon weights folder. Add "
+				"+DirectoriesToAlwaysStageAsNonUFS=(Path=\"Models\") to [/Script/UnrealEd.ProjectPackagingSettings] in Config/DefaultGame.ini "
+				"(Project Settings > Packaging > Additional Non-Asset Directories To Copy)."));
+		}
+
+		const IPipelineFileModel* const FileModel = Cast<IPipelineFileModel>(Package.GgufModel.Get());
+		if (FileModel == nullptr)
+		{
+			return;
+		}
+		const FString Folder = FileModel->GetAbsoluteFilePath();
+		if (Folder.IsEmpty())
+		{
+			// ValidateSettings reported the invalid RelativePath.
+			return;
+		}
+
+		IFileManager& FileManager = IFileManager::Get();
+		if (!FileManager.DirectoryExists(*Folder))
+		{
+			Report.Add(ESev::Error, ECode::GgufFileMissing, FString::Printf(
+				TEXT("Phonon weights folder %s is missing (the folder does not exist). Copy the weights folder there or re-import it with 'Import Phonon-2 Weights Folder...'."),
+				*Folder));
+			return;
+		}
+		bool bFilesOk = true;
+		for (const TCHAR* Name : { TEXT("weights.bin"), TEXT("weights.json"), TEXT("tokens.txt") })
+		{
+			if (FileManager.FileSize(*(Folder / Name)) < 0)
+			{
+				Report.Add(ESev::Error, ECode::GgufFileMissing, FString::Printf(
+					TEXT("Phonon weights folder %s is missing %s. Copy the complete converter output (weights.bin, weights.json, tokens.txt) there or re-import it."),
+					*Folder, Name));
+				bFilesOk = false;
+			}
+		}
+		if (!bFilesOk)
+		{
+			return;
+		}
+
+		const FString BinPath = Folder / TEXT("weights.bin");
+		const int64 ActualSize = FileManager.FileSize(*BinPath);
+		const int64 ExpectedSize = FileModel->GetFileSizeBytes();
+		if (ActualSize != ExpectedSize)
+		{
+			Report.Add(ESev::Error, ECode::GgufSizeMismatch, FString::Printf(
+				TEXT("The Phonon weights file %s is %lld bytes, the asset expects %lld bytes. The file was replaced or is incomplete; re-import the weights folder."),
+				*BinPath, ActualSize, ExpectedSize));
+			return;
+		}
+
+		UE_LOG(LogModelPipelinesEditor, Display, TEXT("Hashing %s (%.1f MB)..."), *BinPath, ActualSize / (1024.0 * 1024.0));
+		FString ActualSha;
+		FString HashError;
+		if (!ComputeFileSha256(BinPath, ActualSha, HashError))
+		{
+			Report.Add(ESev::Error, ECode::GgufFileMissing, FString::Printf(
+				TEXT("Can't read the Phonon weights file %s: %s. Close programs that lock it, check its permissions, or re-import the weights folder."), *BinPath, *HashError));
+			return;
+		}
+		const FString ExpectedSha = FileModel->GetFileSha256().TrimStartAndEnd().ToLower();
+		if (!ActualSha.Equals(ExpectedSha, ESearchCase::IgnoreCase))
+		{
+			Report.Add(ESev::Error, ECode::GgufShaMismatch, FString::Printf(
+				TEXT("The Phonon weights file %s has SHA-256 %s, the asset expects %s. The file was replaced or is corrupt; re-import the weights folder."),
+				*BinPath, *ActualSha, *ExpectedSha));
+			return;
+		}
+
+		if (!Options.bRunSmokeTest || !Report.IsValid())
+		{
+			return;
+		}
+		IPipelineBackend* const Backend = FModelPipelinesCoreModule::Get().FindBackend(EPipelineModelFormat::Phonon);
+		if (Backend == nullptr)
+		{
+			Report.Add(ESev::Info, ECode::None, TEXT("no Phonon backend (enable ModelPipelines Generative); runtime checks skipped"));
+			return;
+		}
+
+		const int32 CpuIndex = Report.DeviceChecks.Num();
+		AddCheck(Report, EPipelineDevice::CPU, Backend->IsDeviceAvailable(EPipelineDevice::CPU));
+		if (!Report.DeviceChecks[CpuIndex].bAvailable)
+		{
+			const FString Msg = TEXT("Phonon: the Phonon backend reports no CPU device. Reinstall or re-enable ModelPipelines Generative.");
+			Report.DeviceChecks[CpuIndex].Message = Msg;
+			Report.Add(ESev::Error, ECode::RuntimeUnavailable, Msg);
+			return;
+		}
+		FPipelineResult PrepareResult;
+		TSharedPtr<IPipelineModel> Model = Backend->PrepareModelFromSource(FPipelineModelSource::FromPackage(&Package), EPipelineDevice::CPU, PrepareResult);
+		const FPipelineResult InitResult = Model.IsValid() ? Model->Initialize() : PrepareResult;
+		if (!Model.IsValid() || !InitResult.bSuccess)
+		{
+			const FString Msg = FString::Printf(TEXT("Phonon: the model could not be created on CPU: %s. Re-import the weights folder."),
+				InitResult.Message.IsEmpty() ? TEXT("no reason given") : *InitResult.Message);
+			Report.DeviceChecks[CpuIndex].Message = Msg;
+			Report.Add(ESev::Error, ECode::ModelCreateFailed, Msg);
+			return;
+		}
+		Report.DeviceChecks[CpuIndex].bCreated = true;
+
+		constexpr int32 SampleRate = 16000;
+		TArray<float> Tone;
+		Tone.SetNumUninitialized(SampleRate);
+		for (int32 i = 0; i < SampleRate; ++i)
+		{
+			Tone[i] = 0.5f * FMath::Sin(2.0f * PI * 440.0f * static_cast<float>(i) / static_cast<float>(SampleRate));
+		}
+		TSharedPtr<IPipelineSession> Session = MakeShared<FPhononSmokeSession>(Model, MoveTemp(Tone), SampleRate);
+		Model.Reset();
+		TArray<FPipelineSessionProgress> Progress;
+		const FPipelineResult SmokeResult = FPipelineExecutor::Get().RunSessionBlocking(Session, Progress);
+		Session.Reset();
+		FPipelineDeviceCheck& Cpu = Report.DeviceChecks[CpuIndex];
+		if (!SmokeResult.bSuccess)
+		{
+			const FString Msg = FString::Printf(TEXT("Phonon: smoke transcription of 1 s of a 440 Hz tone failed on CPU: %s. Re-import the weights folder."),
+				SmokeResult.Message.IsEmpty() ? TEXT("no reason given") : *SmokeResult.Message);
+			Cpu.Message = Msg;
+			Report.Add(ESev::Error, ECode::SmokeRunFailed, Msg);
+			return;
+		}
+		Cpu.bRan = true;
+		Cpu.InferenceMs = SmokeResult.InferenceMs;
+		Cpu.Message = TEXT("CPU: Phonon smoke transcription ran");
+	}
 }
 
 FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPackage* Package, const FPipelineValidateOptions& Options)
@@ -628,6 +844,13 @@ FPipelineValidationReport ValidatePipelineModelPackage(const UPipelineModelPacka
 		return Report;
 	}
 	Package->ValidateSettings(Report);
+	if (Package->Task == EPipelineTask::SpeechToText && Package->Model == nullptr && Package->GetModelFormat() == EPipelineModelFormat::Phonon)
+	{
+		// Phonon (SpeechToText stage B, C81b): file checks and an engine smoke; the NNE steps never apply.
+		ValidatePhonon(*Package, Options, Report);
+		UE_LOG(LogModelPipelinesEditor, Verbose, TEXT("Validated %s: %d errors, %d warnings."), *Package->GetPathName(), Report.NumErrors(), Report.NumWarnings());
+		return Report;
+	}
 	if (Package->GgufModel != nullptr || Package->GetModelFormat() == EPipelineModelFormat::GGUF)
 	{
 		// GGUF (or a GgufModel that ValidateSettings already rejected): the NNE steps never apply.

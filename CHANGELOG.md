@@ -13,6 +13,7 @@
 - Real-time speech: Blueprint nodes **Start Listening** (pins On Speech Started, On Partial, On Final, On Speech Ended, On Stopped, On Failure), **Stop Listening** and **Push Speech Audio**. C++: `USpeechToTextPipeline::StartStream`, `USpeechStream`, `USpeechMicrophoneSource`.
 - An energy voice-activity detector finds utterances (12 dB over the noise floor, above -55 dBFS, 0.2 s hangover, 30 s cap). Finals work with the ONNX engine. Partials need the Phonon engine of ModelPipelines Generative.
 - Docs: "Real-time speech" in `Docs/SpeechToText.md`, plus node and troubleshooting entries.
+- Sample map `L_TalkToText` (actor `ModelPipelinesTalkToTextSample`): press Play, talk, see the final text with the delay of each line. Needs the `phonon-2-fp16w` package in `/Game/Models`. Docs: `Docs/Samples.md`. The map script `Tools/samples/build_sample_maps.py` gains `--only <map>` to rebuild single maps.
 
 ### Known limitations
 

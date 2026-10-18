@@ -8,6 +8,8 @@ Runs build_sample_maps.py inside UnrealEditor-Cmd (headless) and fails unless th
 -Rhi offscreen  (default) passes -RenderOffscreen instead; this is the one that works
                 for -OrientCheck, which renders)
 -OrientCheck <dir>  forwards --orient-check <dir> to the script
+-Only <map>[,<map>] rebuilds only those maps (e.g. -Only L_TalkToText): other maps, textures and materials stay untouched, and
+                -Images is optional when the named maps need no photos. Forwarded to the script as --only (env SAMPLE_MAPS_ONLY).
 Paths must not contain spaces inside the script argument string unless quoted; this runner quotes them.
 Exit code: 0 only if UnrealEditor-Cmd exited 0 AND the log has the OK line AND no Python traceback.
 #>
@@ -17,6 +19,7 @@ param(
     [string]$Images = "",
     [ValidateSet("null", "offscreen")] [string]$Rhi = "offscreen",
     [string]$OrientCheck = "",
+    [string]$Only = "",
     [string]$Log = ""
 )
 $ErrorActionPreference = "Stop"
@@ -38,6 +41,7 @@ if (-not (Test-Path $pluginContent)) {
 # environment variables (the script reads SAMPLE_MAPS_IMAGES and SAMPLE_MAPS_ORIENT_DIR as defaults).
 $pyArgs = "$script"
 if ($Images -ne "") { $env:SAMPLE_MAPS_IMAGES = $Images }
+if ($Only -ne "") { $env:SAMPLE_MAPS_ONLY = $Only }
 if ($OrientCheck -ne "") { New-Item -ItemType Directory -Force -Path $OrientCheck | Out-Null; $env:SAMPLE_MAPS_ORIENT_DIR = $OrientCheck }
 
 if ($Log -eq "") {

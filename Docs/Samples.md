@@ -1,6 +1,6 @@
 # Samples
 
-Four sample maps show the four tasks. Each map needs one model package in `/Game/Models`.
+Five sample maps show the four tasks and speech to text. Each map needs one model package in `/Game/Models`.
 
 | Map | Task | Package needed |
 |---|---|---|
@@ -8,13 +8,14 @@ Four sample maps show the four tasks. Each map needs one model package in `/Game
 | `L_Sentiment` | Text classification | `/Game/Models/distilbert-sst2` |
 | `L_SceneClassifier` | Image classification | `/Game/Models/resnet-50` |
 | `L_Detection` | Object detection | `/Game/Models/rtdetr_r18vd` |
+| `L_TalkToText` | Speech to text | `/Game/Models/phonon-2-fp16w` |
 
 The maps are in the plugin's content, in the folder `/ModelPipelines/Samples/Maps/`.
 
 ## Before you start
 
 1. [Install the plugin](Install.md), including **Show Plugin Content**.
-2. [Get and import the models](ImportModel.md) so the four packages exist in `/Game/Models`, or run the batch import script from [Import a model](ImportModel.md#import-from-blueprint-or-python-batch-import).
+2. [Get and import the models](ImportModel.md) so the packages exist in `/Game/Models`, or run the batch import script from [Import a model](ImportModel.md#import-from-blueprint-or-python-batch-import).
 
 ## Open and play a map
 
@@ -34,7 +35,7 @@ Do what it says, then press Play again.
 
 ### Sample actor properties
 
-All four actors share these properties (category **Model Pipelines|Sample**):
+All five actors share these properties (category **Model Pipelines|Sample**):
 
 | Property | Default | What it does |
 |---|---|---|
@@ -150,6 +151,60 @@ Blueprint version:
 5. In your HUD **Event Receive Draw HUD**: **For Each Loop** over `Detections`. For each, draw a rectangle from **Box Min** to **Box Max**, each multiplied by the canvas size, and the **Label** and **Score**.
 
 If the boxes do not line up with the objects, see [Troubleshooting](Troubleshooting.md#detection-boxes-dont-line-up-with-the-objects).
+
+## L_TalkToText
+
+Press Play, talk, see the text. This map needs the speech model (about 1.3 GB). You get it in two steps.
+
+Get the model first:
+
+1. Run `Tools/fetch_phonon2.py --out <folder>` (see [Speech to text, step 1](SpeechToText.md#step-1-get-and-convert-the-model)). You should see a `phonon-2-fp16w` folder in `<folder>`.
+2. In the Content Browser, right-click and choose **Import Hugging Face Model Folder...**. Pick the `phonon-2-fp16w` folder and import it into `/Game/Models` (see [Speech to text, step 2](SpeechToText.md#step-2-import-the-folder)). You should see the package `/Game/Models/phonon-2-fp16w`.
+
+The model is Phonon-2 by Fermion Research, license CC-BY-4.0. If you ship it, you must credit it. See [Model licenses](ModelLicenses.md).
+
+Then play the map:
+
+1. Open `L_TalkToText` from the plugin content (see "Open and play a map" above).
+2. Click **Play**.
+3. Speak into your microphone.
+4. You should see a panel titled **Talk to Text** with:
+   - An engine line. With the free ONNX engine it reads `Engine: ONNX (final text only; partial text needs ModelPipelines Generative)`. With the Phonon engine it reads `Engine: Phonon (partial text while you speak)`.
+   - A status line: first `Warming up the model...` for a few seconds (one short test transcription, so your first sentence is not slow), then `Listening (<microphone name>)`, then `Hearing speech...` while you talk, then `Transcribing...` until the text arrives.
+   - The last 8 final lines. Each has its delay, for example `[0.31 s]`. The delay is the time from the end of your speech to the final text.
+   - The partial text in grey while you speak. Only the Phonon engine gives it.
+   - A **Stop listening** button. Click it to stop. It then reads **Start listening**. The mouse cursor is on.
+
+Measured delay (end of speech to final text, Intel i7-11800H laptop CPU): about 0.5 to 0.6 s with the ONNX engine, about 0.3 s with the Phonon engine. The full table is in [Speech to text, Latency](SpeechToText.md#latency).
+
+No microphone: the status says `No microphone (...)`. Audio you push with **Get Stream** then **Push Speech Audio** is still transcribed.
+
+Phonon engine (the paid ModelPipelines Generative plugin): import the Phonon-2 weights folder as described in that plugin's docs. Then select the sample actor and set **Package** to that package.
+
+If the package is missing, the map shows:
+
+> Model package not found: `<path>`. Run Plugins/ModelPipelines/Tools/fetch_phonon2.py --out `<folder>`, import the phonon-2-fp16w folder into /Game/Models, then press Play again. With ModelPipelines Generative you can point Package at an imported Phonon-2 weights package instead. See Docs/Samples.md.
+
+Actor: `ModelPipelinesTalkToTextSample`. Its **Package** defaults to `/Game/Models/phonon-2-fp16w`. Properties (category **Model Pipelines|Sample**):
+
+| Property | Default | What it does |
+|---|---|---|
+| **bUseMicrophone** | on | Listen to the microphone. Turn it off to push your own audio. |
+| **DeviceIndex** | -1 | The input device. -1 is the default device. |
+| **bAutoStart** | on | Start listening when the pipeline is ready. |
+| **StreamSettings** | defaults | The real-time settings. See [Speech to text, Settings](SpeechToText.md#settings). |
+| **MaxLines** | 8 | How many final lines the panel keeps. |
+
+Blueprint-callable on the actor: **Start Listening**, **Stop Listening**, **Is Listening**, **Is Microphone Active**, **Has Partial Text**, **Get Final Lines**, **Get Partial Text**, **Get Last Final Latency Seconds**, **Get Stream**. The event **On Final Text** fires for each final line.
+
+Blueprint version of the core flow:
+
+1. **Event Begin Play** > **Create Speech To Text Pipeline** (Package = the phonon-2-fp16w package) > set variable `Pipeline`.
+2. The pipeline's **Start Listening** node (not the sample actor's function of the same name) (Pipeline = `Pipeline`, Use Microphone ticked, Device Index = -1). Store the returned action in a variable.
+3. On **On Final**: append **Transcript** and a new line to the old text, then **Set Text** on a Text widget.
+4. To stop, call the **Stop Listening** node with the stored action.
+
+See [Nodes](Nodes.md#start-listening) for every pin.
 
 ## Performance
 

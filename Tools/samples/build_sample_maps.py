@@ -1,10 +1,13 @@
-"""Build the four ModelPipelines sample maps (editor Python, UE 5.7; assets also load in 5.8).
+"""Build the five ModelPipelines sample maps (editor Python, UE 5.7; assets also load in 5.8).
 
 Run inside the editor, normally through run_build_sample_maps.ps1:
 
     UnrealEditor-Cmd.exe <project> -ExecutePythonScript="<this file> --images <dir>" -unattended -nosplash -nullrhi
 
-Everything under /ModelPipelines/Samples/ is deleted and recreated on every run (idempotent).
+Everything under /ModelPipelines/Samples/ is deleted and recreated on every run (idempotent), except with --only:
+then only the named map assets are deleted and recreated and textures, materials and other maps are left alone
+(--only L_TalkToText needs no photos, so --images is optional). The runner passes --only through the SAMPLE_MAPS_ONLY
+environment variable.
 
 Outside the editor only `--dry-run` works: it validates the PNGs and prints the planned asset list.
 
@@ -42,7 +45,10 @@ MAPS = [
     ("L_Sentiment", "ModelPipelinesSentimentSample", "text", []),
     ("L_SceneClassifier", "ModelPipelinesSceneClassifierSample", "vision", CLASSIFY_PHOTOS),
     ("L_Detection", "ModelPipelinesDetectionSample", "vision", DETECT_PHOTOS),
+    ("L_TalkToText", "ModelPipelinesTalkToTextSample", "speech", []),  # contract C82
 ]
+# A "speech" map is laid out like a "text" map: PlayerStart, sun, sky light, floor, one sample actor, no boards.
+FLOOR_KINDS = ("text", "speech")
 ALL_PHOTOS = CLASSIFY_PHOTOS + DETECT_PHOTOS
 
 # --- Layout (Unreal units; X forward, Y right, Z up; yaw 0 faces +X, yaw 90 faces +Y) ---
@@ -98,11 +104,42 @@ def default_images_dir():
     return os.path.normpath(os.path.join(here, "..", "..", "..", ".pipelines-dev", "sample_images"))
 
 
-def validate_images(images_dir):
-    """Check the six PNGs exist and are <= MAX_TEXTURE_PX. Returns {name: (w, h, path)}."""
+def select_maps(only):
+    """Maps to build. `only` is a list of map names (None = all). Unknown names raise."""
+    if not only:
+        return list(MAPS)
+    known = [m[0] for m in MAPS]
+    bad = [n for n in only if n not in known]
+    if bad:
+        raise RuntimeError("unknown map(s) for --only: %s (known: %s)" % (", ".join(bad), ", ".join(known)))
+    return [m for m in MAPS if m[0] in only]
+
+
+def parse_only(values):
+    """--only values: repeatable and/or comma separated. Returns a de-duplicated list, or None."""
+    names = []
+    for v in values or []:
+        for n in str(v).replace(";", ",").split(","):
+            n = n.strip()
+            if n and n not in names:
+                names.append(n)
+    return names or None
+
+
+def photos_needed(maps):
+    out = []
+    for _m, _c, _k, photos in maps:
+        for p in photos:
+            if p not in out:
+                out.append(p)
+    return out
+
+
+def validate_images(images_dir, names=None):
+    """Check the PNGs (all six, or `names`) exist and are <= MAX_TEXTURE_PX. Returns {name: (w, h, path)}."""
     out = {}
     problems = []
-    for name in ALL_PHOTOS:
+    for name in (ALL_PHOTOS if names is None else names):
         path = os.path.join(images_dir, name + ".png")
         if not os.path.isfile(path):
             problems.append("missing: " + path)
@@ -151,10 +188,13 @@ def board_layout(photos, sizes):
     return out
 
 
-def planned_assets(sizes):
+def planned_assets(sizes, maps=None, full=True):
+    """Planned asset list. full=False (--only): the named maps only, textures and materials stay untouched."""
     items = []
-    for m, cls, kind, photos in MAPS:
+    for m, cls, kind, photos in (MAPS if maps is None else maps):
         items.append("%s/%s  (map, %s, actor unreal.%s)" % (MAPS_DIR, m, kind, cls))
+    if not full:
+        return items
     for name in ALL_PHOTOS:
         items.append("%s/T_%s  (texture %dx%d)" % (TEXTURES_DIR, name, sizes[name][0], sizes[name][1]))
     items.append("%s/%s  (material, unlit, parameter \"%s\")" % (MATERIALS_DIR, MASTER_MATERIAL, PHOTO_PARAMETER))
@@ -299,7 +339,7 @@ def build_map(unreal, map_name, cls_name, kind, photos, mis, sizes, plane):
         raise RuntimeError("could not spawn " + cls_name)
     sample.set_actor_label(cls_name)
 
-    if kind == "text":
+    if kind in FLOOR_KINDS:
         floor = actor_ss.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(0, 0, 0), unreal.Rotator())
         floor.set_actor_label("Floor")
         floor.set_actor_scale3d(vec(unreal, FLOOR_SCALE))  # VERIFY: set_actor_scale3d
@@ -317,6 +357,13 @@ def build_map(unreal, map_name, cls_name, kind, photos, mis, sizes, plane):
             log("  board %s loc=%s rot=%s scale=%s" % ((b["name"],) + tuple(str(x) for x in e)))
 
     log("  PlayerStart loc=%s rot=%s" % (ps.get_actor_location(), ps.get_actor_rotation()))
+    # Actor set check for this map: the sample actor, PlayerStart, Sun, SkyLight, and the floor or the boards.
+    labels = sorted(a.get_actor_label() for a in actor_ss.get_all_level_actors())
+    want = ["PlayerStart", "Sun", "SkyLight", cls_name]
+    want += ["Floor"] if kind in FLOOR_KINDS else ["Board_" + n for n in photos]
+    missing = [w for w in want if w not in labels]
+    if missing:
+        raise RuntimeError("%s is missing actors: %s (has: %s)" % (map_name, ", ".join(missing), ", ".join(labels)))
     if not level_ss.save_current_level():
         raise RuntimeError("save_current_level failed: " + path)
 
@@ -367,28 +414,49 @@ def run_editor(args, sizes):
         pass
 
     eal = unreal.EditorAssetLibrary
-    if eal.does_directory_exist(CONTENT_ROOT):
-        log("deleting " + CONTENT_ROOT)
-        if not eal.delete_directory(CONTENT_ROOT):
-            raise RuntimeError("delete_directory failed: " + CONTENT_ROOT)
-    for d in (MAPS_DIR, TEXTURES_DIR, MATERIALS_DIR):
-        if not eal.make_directory(d):
-            raise RuntimeError("make_directory failed: %s (is the /ModelPipelines/ plugin Content folder mounted?)" % d)
+    only = parse_only(args.only)
+    maps = select_maps(only)
+    if only:
+        # Rebuild only the named maps: delete just those map assets, keep everything else.
+        eal.make_directory(MAPS_DIR)
+        for map_name, _c, _k, _p in maps:
+            asset = "%s/%s" % (MAPS_DIR, map_name)
+            if eal.does_asset_exist(asset):
+                log("deleting " + asset)
+                if not eal.delete_asset(asset):
+                    raise RuntimeError("delete_asset failed: " + asset)
+    else:
+        if eal.does_directory_exist(CONTENT_ROOT):
+            log("deleting " + CONTENT_ROOT)
+            if not eal.delete_directory(CONTENT_ROOT):
+                raise RuntimeError("delete_directory failed: " + CONTENT_ROOT)
+        for d in (MAPS_DIR, TEXTURES_DIR, MATERIALS_DIR):
+            if not eal.make_directory(d):
+                raise RuntimeError("make_directory failed: %s (is the /ModelPipelines/ plugin Content folder mounted?)" % d)
 
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
     plane = eal.load_asset("/Engine/BasicShapes/Plane")
     if plane is None:
         raise RuntimeError("/Engine/BasicShapes/Plane not found")
 
-    textures = {n: import_texture(unreal, asset_tools, n, sizes[n][2]) for n in ALL_PHOTOS}
-    master = create_master_material(unreal, asset_tools)
-    mis = {n: create_instance(unreal, asset_tools, master, n, textures[n]) for n in ALL_PHOTOS}
+    mis = {}
+    if not only:
+        textures = {n: import_texture(unreal, asset_tools, n, sizes[n][2]) for n in ALL_PHOTOS}
+        master = create_master_material(unreal, asset_tools)
+        mis = {n: create_instance(unreal, asset_tools, master, n, textures[n]) for n in ALL_PHOTOS}
+    else:
+        # Photo maps rebuilt on their own reuse the existing material instances.
+        for n in photos_needed(maps):
+            mi = eal.load_asset("%s/MI_%s" % (MATERIALS_DIR, n))
+            if mi is None:
+                raise RuntimeError("MI_%s not found: run once without --only to create textures and materials" % n)
+            mis[n] = mi
 
-    for map_name, cls_name, kind, photos in MAPS:
+    for map_name, cls_name, kind, photos in maps:
         build_map(unreal, map_name, cls_name, kind, photos, mis, sizes, plane)
 
     if args.orient_check:
-        for map_name, _cls, kind, photos in MAPS:
+        for map_name, _cls, kind, photos in maps:
             if kind == "vision":
                 orient_check(unreal, args.orient_check, map_name, photos, sizes)
 
@@ -396,26 +464,42 @@ def run_editor(args, sizes):
     log("assets under %s (%d):" % (CONTENT_ROOT, len(assets)))
     for a in assets:
         log("  " + a)
-    expected = 4 + len(ALL_PHOTOS) + 1 + len(ALL_PHOTOS)
+    if only:
+        # Verify only the rebuilt maps.
+        for map_name, _c, _k, _p in maps:
+            want = "%s/%s" % (MAPS_DIR, map_name)
+            if not any(a.split(".")[0] == want for a in assets):
+                raise RuntimeError("rebuilt map not found: " + want)
+        log("rebuilt %d map(s): %s" % (len(maps), ", ".join(m[0] for m in maps)))
+        return
+    expected = len(MAPS) + len(ALL_PHOTOS) + 1 + len(ALL_PHOTOS)
     if len(assets) != expected:
         raise RuntimeError("expected %d assets, found %d" % (expected, len(assets)))
 
 
 def main(argv):
     p = argparse.ArgumentParser(description="Build the ModelPipelines sample maps (run inside the editor).")
-    p.add_argument("--images", default=os.environ.get("SAMPLE_MAPS_IMAGES") or default_images_dir(), help="folder with the six sample PNGs")
+    p.add_argument("--images", default=os.environ.get("SAMPLE_MAPS_IMAGES") or default_images_dir(), help="folder with the six sample PNGs (optional when --only needs no photos)")
+    p.add_argument("--only", action="append", metavar="MapName",
+                   default=[os.environ["SAMPLE_MAPS_ONLY"]] if os.environ.get("SAMPLE_MAPS_ONLY") else [],
+                   help="rebuild only these maps (repeatable or comma list); other assets stay untouched")
     p.add_argument("--dry-run", action="store_true",
                    help="validate inputs and print the planned asset list; touches no assets (works outside the editor)")
     p.add_argument("--orient-check", metavar="DIR", default=os.environ.get("SAMPLE_MAPS_ORIENT_DIR") or None,
                    help="after building, render the view of each vision board to DIR (needs a real RHI)")
     args = p.parse_args(argv)
     try:
-        sizes = validate_images(args.images)
-        log("images: " + args.images)
-        for line in planned_assets(sizes):
+        only = parse_only(args.only)
+        maps = select_maps(only)
+        sizes = validate_images(args.images, photos_needed(maps) if only else None)
+        if only:
+            log("only: " + ", ".join(m[0] for m in maps))
+        if sizes:
+            log("images: " + args.images)
+        for line in planned_assets(sizes, maps, full=not only):
             log("plan: " + line)
         if args.dry_run:
-            for m, _c, kind, photos in MAPS:
+            for m, _c, kind, photos in maps:
                 for b in board_layout(photos, sizes):
                     log("plan: %s board %s center=%s scale=%s" % (m, b["name"], b["center"], b["scale"]))
         else:

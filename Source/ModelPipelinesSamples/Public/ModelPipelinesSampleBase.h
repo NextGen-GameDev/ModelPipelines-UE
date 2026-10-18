@@ -88,6 +88,10 @@ protected:
 	/** Slug used in the missing-package hint, e.g. "resnet-50". */
 	virtual FString GetModelSlug() const PURE_VIRTUAL(AModelPipelinesSampleBase::GetModelSlug, return FString(););
 
+	/** Status text shown when Package does not resolve (PackagePath = the soft path or "(none)"). Default: the
+	    fetch_reference_models.py hint with GetModelSlug(). */
+	virtual FString GetMissingPackageText(const FString& PackagePath) const;
+
 	/** Sets LastResult and the state (Ready), starts the pending request if any, broadcasts OnSampleResult, refreshes the overlay.
 	    Ignored after EndPlay. Call it from the pipeline callback of every call started by RunOrQueue. */
 	void FinishCall(const FPipelineResult& Result);

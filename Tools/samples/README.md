@@ -1,21 +1,21 @@
 # Sample maps: rebuild script
 
-`build_sample_maps.py` builds the four sample maps, their photo textures and materials with editor Python.
+`build_sample_maps.py` builds the five sample maps, their photo textures and materials with editor Python.
 The `.umap` and `.uasset` files are build output. Rebuild them with this script, never by hand.
 
 ## What it creates
 
 Everything lives under `/ModelPipelines/Samples/` (plugin folder `Content/Samples/`). The script deletes and recreates that
-folder on every run. It creates 17 assets:
+folder on every run. It creates 18 assets:
 
 | Asset | Count | Notes |
 |---|---|---|
-| `Maps/L_SemanticSearch`, `L_Sentiment`, `L_SceneClassifier`, `L_Detection` | 4 | Each has a PlayerStart, a directional light, a sky light, `GameModeBase` as the game mode override and one sample actor. |
+| `Maps/L_SemanticSearch`, `L_Sentiment`, `L_SceneClassifier`, `L_Detection`, `L_TalkToText` | 5 | Each has a PlayerStart, a directional light, a sky light, `GameModeBase` as the game mode override and one sample actor. |
 | `Textures/T_<name>` | 6 | The PNGs made by `Tools/fetch_sample_images.py`. Each is 1024 px or smaller. |
 | `Materials/M_SamplePhoto` | 1 | Unlit. A texture parameter named `Photo` feeds Emissive Color. |
 | `Materials/MI_<name>` | 6 | One material instance per photo. |
 
-The text maps (`L_SemanticSearch`, `L_Sentiment`) also get a floor plane. The vision maps get photo boards: the four
+The text and speech maps (`L_SemanticSearch`, `L_Sentiment`, `L_TalkToText`) also get a floor plane. The vision maps get photo boards: the four
 classify photos in a row on `L_SceneClassifier`, the two detect photos on `L_Detection`. Boards use `/Engine/BasicShapes/Plane`.
 No engine content is copied.
 
@@ -50,10 +50,11 @@ Runner options:
 - `-Rhi null` passes `-nullrhi`. Kept for completeness; do not use it with 5.7.
 - `-OrientCheck <dir>` renders each vision board as seen from the PlayerStart into `<dir>` (needs a rendering RHI, so not `-Rhi null`).
 - `-Log <path>` sets the editor log path.
+- `-Only <map>[,<map>]` rebuilds only those maps (for example `-Only L_TalkToText`). It deletes and recreates just those map assets and leaves textures, materials and other maps alone. `-Images` is optional when the named maps need no photos (`L_TalkToText` needs none). The script checks only the rebuilt maps.
 
-The images folder and the orient-check folder reach the script through environment variables (`SAMPLE_MAPS_IMAGES` and
-`SAMPLE_MAPS_ORIENT_DIR`), because paths with spaces do not survive the `-ExecutePythonScript` command-line parsing. The runner sets
-them from `-Images` and `-OrientCheck`. The script reads them as the defaults of `--images` and `--orient-check`.
+The images folder, the orient-check folder and the `-Only` list reach the script through environment variables (`SAMPLE_MAPS_IMAGES`,
+`SAMPLE_MAPS_ORIENT_DIR` and `SAMPLE_MAPS_ONLY`), because paths with spaces do not survive the `-ExecutePythonScript` command-line parsing. The runner sets
+them from `-Images`, `-OrientCheck` and `-Only`. The script reads them as the defaults of `--images`, `--orient-check` and `--only`.
 
 ## Orient check
 
@@ -71,6 +72,7 @@ every photo. If not, change `BOARD_SPIN_DEG` (and `BOARD_MIRROR` if needed), reb
 
 ```
 python build_sample_maps.py --dry-run --images <dir>
+python build_sample_maps.py --dry-run --only L_TalkToText
 ```
 
-This validates the PNGs, prints the planned assets and board placement, and touches nothing.
+This validates the PNGs (with `--only`, only those the named maps need), prints the planned assets and board placement, and touches nothing.

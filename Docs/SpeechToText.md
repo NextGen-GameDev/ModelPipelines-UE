@@ -176,6 +176,8 @@ To feed your own audio (voice chat, game audio), untick **Use Microphone**. Call
 
 All pins: [Nodes](Nodes.md#start-listening).
 
+**Try it: the L_TalkToText sample map.** The plugin ships a map that listens to your microphone and shows the final lines with the delay of each one. Open `L_TalkToText` and press Play. Steps and properties: [Samples](Samples.md#l_talktotext).
+
 ### Settings
 
 **Start Listening** takes a **Settings** struct (`FSpeechStreamSettings`). Out-of-range values are clamped.

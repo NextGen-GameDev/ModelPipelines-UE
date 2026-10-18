@@ -8,7 +8,7 @@ public class ModelPipelinesSamples : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "ModelPipelinesCore" });
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "ModelPipelinesCore", "ModelPipelinesSpeech" });
 		// The sample actors use the task pipelines and draw their overlays with plain Slate.
 		PrivateDependencyModuleNames.AddRange(new string[] { "ModelPipelinesText", "ModelPipelinesVision", "Slate", "SlateCore", "InputCore" });
 

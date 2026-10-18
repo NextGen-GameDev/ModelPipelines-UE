@@ -32,6 +32,7 @@
 #include "ModelPipelinesSentimentSample.h"
 #include "ModelPipelinesSceneClassifierSample.h"
 #include "ModelPipelinesDetectionSample.h"
+#include "ModelPipelinesTalkToTextSample.h"
 
 namespace SampleMapsSpecPrivate
 {
@@ -48,6 +49,7 @@ namespace SampleMapsSpecPrivate
 	static UClass* SentimentClass() { return AModelPipelinesSentimentSample::StaticClass(); }
 	static UClass* SceneClass() { return AModelPipelinesSceneClassifierSample::StaticClass(); }
 	static UClass* DetectionClass() { return AModelPipelinesDetectionSample::StaticClass(); }
+	static UClass* TalkToTextClass() { return AModelPipelinesTalkToTextSample::StaticClass(); }
 
 	static TArray<FMapCase> MakeCases()
 	{
@@ -58,6 +60,7 @@ namespace SampleMapsSpecPrivate
 			{ TEXT("classify_jellyfish"), TEXT("classify_soccer_ball"), TEXT("classify_violin"), TEXT("classify_elephant") } });
 		C.Add({ TEXT("L_Detection"), &DetectionClass, TEXT("/Game/Models/rtdetr_r18vd.rtdetr_r18vd"),
 			{ TEXT("detect_dog_walk"), TEXT("detect_street_market") } });
+		C.Add({ TEXT("L_TalkToText"), &TalkToTextClass, TEXT("/Game/Models/phonon-2-fp16w.phonon-2-fp16w"), {} });   // WP9R.6 (C82)
 		return C;
 	}
 
@@ -285,9 +288,9 @@ void FSampleMapsSpec::Define()
 			}
 		});
 
-		It("Asset registry lists exactly the 17 sample assets", [this]()
+		It("Asset registry lists exactly the 18 sample assets", [this]()
 		{
-			// No stray engine copies or leftovers from an earlier script run: 4 maps + 6 textures + 1 material + 6 MIs.
+			// No stray engine copies or leftovers from an earlier script run: 5 maps (L_TalkToText since WP9R.6) + 6 textures + 1 material + 6 MIs.
 			IAssetRegistry& AR = FAssetRegistryModule::GetRegistry();
 			AR.ScanPathsSynchronous({ TEXT("/ModelPipelines/Samples") }, true);
 			TArray<FAssetData> Assets;
@@ -302,8 +305,8 @@ void FSampleMapsSpec::Define()
 			}
 			Names.Sort();
 			const FString Listing = FString::Join(Names, TEXT("; "));
-			TestEqual(*FString::Printf(TEXT("total assets under /ModelPipelines/Samples; found: %s"), *Listing), Assets.Num(), 17);
-			TestEqual(*FString::Printf(TEXT("World assets; found: %s"), *Listing), ByClass.FindRef(TEXT("World")), 4);
+			TestEqual(*FString::Printf(TEXT("total assets under /ModelPipelines/Samples; found: %s"), *Listing), Assets.Num(), 18);
+			TestEqual(*FString::Printf(TEXT("World assets; found: %s"), *Listing), ByClass.FindRef(TEXT("World")), 5);
 			TestEqual(*FString::Printf(TEXT("Texture2D assets; found: %s"), *Listing), ByClass.FindRef(TEXT("Texture2D")), 6);
 			TestEqual(*FString::Printf(TEXT("Material assets; found: %s"), *Listing), ByClass.FindRef(TEXT("Material")), 1);
 			TestEqual(*FString::Printf(TEXT("MaterialInstanceConstant assets; found: %s"), *Listing), ByClass.FindRef(TEXT("MaterialInstanceConstant")), 6);

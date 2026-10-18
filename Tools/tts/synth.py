@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Synthesizes chosen corpus lines with Kokoro v1.0 (ONNX, voice af_heart) from three G2P outputs: the misaki
-reference, larroy as-is and the misaki lexicon port, in that order with 0.7 s gaps, one WAV per line in
+reference, larroy as-is and the standalone C++ misaki port, in that order with 0.7 s gaps, one WAV per line in
 <dev>/tts/samples/. Prints each clip's audio length and synthesis time.
 Needs setup_g2p_bench.py --with-model and compare.py first.
 """
@@ -21,7 +21,7 @@ PICKS = {
     "6_homograph": "I read that book last winter, and I'll read it again this winter.",
     "7_interjection": "Shh, they'll hear us.",
 }
-SYSTEMS = [("larroy", "larroy (CMUdict + g2p_en)"), ("port", "misaki lexicon port + g2p_en OOV")]
+SYSTEMS = [("larroy", "larroy (CMUdict + g2p_en)"), ("port", "port, standalone")]
 SAMPLE_RATE = 24000
 
 

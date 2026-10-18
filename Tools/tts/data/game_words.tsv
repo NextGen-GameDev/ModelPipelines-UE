@@ -1,0 +1,18 @@
+# Game dictionary for the misaki port: word<TAB>phonemes (misaki US symbols)<TAB>why.
+# Checked before misaki's lexicon, exact case first, then lowercase. Only words misaki gets wrong or spells out;
+# misaki already reads hmm, ugh, whoa, oof, huh, aha, phew, uh-oh, yikes, NPC, HP, XP, DLC, HUD, PvP, aggro.
+shh	ʃʃ	misaki spells S-H-H
+shhh	ʃʃʃ	misaki spells S-H-H-H
+mmhm	mhmm	misaki spells M-M-H-M; written without a vowel like misaki's own "hmm"
+mm-hmm	mhmm	misaki reads "mhmm" only via espeak
+heh	hˈɛh	not in misaki's lexicon; same pattern as its "meh" (mˈɛh)
+hehe	hɛhˈɛ	espeak reads "he-he" as the pronoun twice
+eww	jˈɪw	not in misaki's lexicon; same as its "ew"
+argh	ˈɑɹ	not in misaki's lexicon (espeak: ˈɑɹɡ)
+grr	ɡɹˈɜɹ	misaki spells G-R-R
+Lv	lˈɛvᵊl	"Lv. 5": level, misaki spells L-V
+Lv.	lˈɛvᵊl	same, when the period stays on the token
+Lvl	lˈɛvᵊl	"Lvl 5": level
+AoE	ˌAˌOˈi	area of effect, said as letters; misaki splits Ao + E
+OP	ˌOpˈi	"overpowered", said as letters; misaki reads the word "op"
+debuff	dˌibˈʌf	stress as in "buff"; espeak stresses the first syllable

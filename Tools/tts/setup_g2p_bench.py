@@ -5,8 +5,9 @@
    g2p_en weights Apache-2.0).
 2. Builds en_dump and misaki_dump with CMake into <dev>/tts/build.
 3. Converts misaki's us_gold/us_silver JSON (Apache-2.0, from the installed misaki package) to
-   <dev>/tts/misaki_us.tsv: word<TAB>tier<TAB>phonemes; homographs keep only DEFAULT (the C++ port has no
-   POS tagger); capitalization growth matches misaki's Lexicon.grow_dictionary.
+   <dev>/tts/misaki_us.tsv: word<TAB>tier<TAB>tag<TAB>phonemes. Tag "-" is the plain or DEFAULT reading;
+   homographs add one line per tag (NOUN, VERB, VBD, None, ...), empty phonemes meaning "no reading".
+   Capitalization growth matches misaki's Lexicon.grow_dictionary.
 4. --with-model: downloads Kokoro v1.0 ONNX + voices (Apache-2.0, kokoro-onnx GitHub release mirror of
    hexgrad/Kokoro-82M) into <dev>/models/kokoro/ and checks the pinned sha256. Only synth.py needs them.
 
@@ -92,9 +93,11 @@ def make_lexicon():
         for tier in ("gold", "silver"):
             with importlib.resources.files(data).joinpath(f"us_{tier}.json").open(encoding="utf-8") as r:
                 for k, v in grow(json.load(r)).items():
-                    ps = v["DEFAULT"] if isinstance(v, dict) else v
-                    if ps:
-                        f.write(f"{k}\t{tier[0]}\t{ps}\n")
+                    if not isinstance(v, dict):
+                        f.write(f"{k}\t{tier[0]}\t-\t{v}\n")
+                        continue
+                    for tag, ps in v.items():
+                        f.write(f"{k}\t{tier[0]}\t{'-' if tag == 'DEFAULT' else tag}\t{ps or ''}\n")
     print("wrote", out)
 
 

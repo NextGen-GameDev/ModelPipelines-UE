@@ -1,0 +1,2 @@
+# Word differences from the misaki + espeak-ng reference that are intentional: the reference is wrong.
+# ref phonemes<TAB>our phonemes<TAB>why. compare.py counts these separately from errors.

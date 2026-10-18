@@ -63,9 +63,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Speech")
 	bool Start(USpeechStream* Stream, int32 DeviceIndex, FPipelineResult& OutResult);
 
-	/** Game thread. Closes the device (waits for the capture thread to finish its last callback); does not stop the stream. */
-	/** Closes the device (does not stop the stream). Waits for the capture thread to exit: normally ~10 ms, up to 1 s if the
-	    device was unplugged mid-capture (the engine's WASAPI backend waits on its buffer event). */
+	/** Game thread. Closes the device; does not stop the stream. Waits for the capture thread to finish its last callback:
+	    normally ~10 ms, up to 1 s if the device was unplugged mid-capture (the engine's WASAPI backend waits on its buffer event). */
 	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Speech")
 	void Stop();
 

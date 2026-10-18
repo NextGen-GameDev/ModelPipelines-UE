@@ -1,0 +1,12 @@
+# Python packages for the TTS G2P bench (Tools/tts). Python 3.12: spaCy has no Python 3.13 wheels here.
+# espeak-ng (via espeakng-loader + phonemizer-fork) is GPL and only the evaluation reference; nothing ships it.
+misaki[en]==0.9.4
+spacy==3.8.16
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+espeakng-loader==0.2.4
+phonemizer-fork==3.3.2
+# synth.py only
+kokoro-onnx==0.6.1
+onnxruntime==1.31.0
+soundfile==0.14.0
+numpy==2.5.4

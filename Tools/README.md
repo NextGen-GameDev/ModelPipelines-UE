@@ -132,5 +132,5 @@ Everything here runs with plain Python (3.11 tested; 3.13 installs, full fetch t
    `--hf-cache <folder>` (defaults point into the dev folder). `--verify-license` re-reads each licence from Wikimedia
    Commons.
 
-TTS exploration: `tts/` holds an English G2P bench for Kokoro (C++ front ends without espeak against misaki + espeak-ng),
+TTS exploration: `tts/` holds an English G2P bench for Kokoro (a C++ misaki port without espeak, against misaki + espeak-ng),
 with its own requirements and README. Nothing in it is packaged.

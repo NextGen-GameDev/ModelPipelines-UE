@@ -34,8 +34,100 @@ namespace UE::ModelPipelines::SpeechTests
 
 	TSharedPtr<ISpeechEngineStream> FFakeSpeechEngine::OpenStream(int32 SampleRate, FPipelineResult& OutResult)
 	{
+		{
+			FScopeLock S(&State->Lock);
+			if (State->bStreaming)
+			{
+				++State->OpenStreamCount;
+				State->LastStreamRate = SampleRate;
+				OutResult = FPipelineResult::Ok();
+				return MakeShared<FFakeSpeechStream>(State);
+			}
+		}
 		OutResult = FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("fake engine has no streaming"));
 		return nullptr;
+	}
+
+	void FFakeSpeechStream::Enter(bool bPartial)
+	{
+		FScopeLock S(&State->Lock);
+		if (IsInGameThread()) { State->bFeedOnGameThread = true; }
+		State->MaxInFlight = FMath::Max(State->MaxInFlight, ++State->InFlight);
+		if (bPartial) { State->MaxPartialInFlight = FMath::Max(State->MaxPartialInFlight, ++State->PartialInFlight); }
+	}
+
+	void FFakeSpeechStream::Leave(bool bPartial)
+	{
+		FScopeLock S(&State->Lock);
+		--State->InFlight;
+		if (bPartial) { --State->PartialInFlight; }
+	}
+
+	FPipelineResult FFakeSpeechStream::Feed(TConstArrayView<float> Mono)
+	{
+		Enter(false);
+		double Delay;
+		{
+			FScopeLock S(&State->Lock);
+			++State->FeedCalls;
+			State->FedSamples += Mono.Num();
+			Delay = State->FeedDelaySeconds;
+		}
+		Pending += Mono.Num();
+		if (Delay > 0.0) { FPlatformProcess::Sleep((float)Delay); }
+		Leave(false);
+		return FPipelineResult::Ok();
+	}
+
+	FPipelineResult FFakeSpeechStream::Partial(FSpeechTranscript& Out)
+	{
+		Enter(true);
+		double Delay;
+		FString Text;
+		{
+			FScopeLock S(&State->Lock);
+			Delay = State->PartialDelaySeconds;
+			const int32 Index = State->PartialCalls++;
+			Text = State->PartialText ? State->PartialText(Index) : FString::Printf(TEXT("partial %d"), Index);
+			State->PartialTexts.Add(Text);
+		}
+		if (Delay > 0.0) { FPlatformProcess::Sleep((float)Delay); }
+		Out.Text = Text;
+		Out.AudioSeconds = (float)Pending / 16000.f;
+		Out.InferenceMs = 1.f;
+		Leave(true);
+		return FPipelineResult::Ok();
+	}
+
+	FPipelineResult FFakeSpeechStream::Flush(TArray<FSpeechTranscript>& OutFinals)
+	{
+		Enter(false);
+		OutFinals.Reset();
+		{
+			FScopeLock S(&State->Lock);
+			++State->FlushCalls;
+			if (Pending > 0)
+			{
+				FSpeechTranscript T;
+				T.Text = State->bEmptyFinalText ? FString() : FString::Printf(TEXT("%s %d"), *State->FinalPrefix, State->FlushesWithAudio);
+				T.AudioSeconds = (float)Pending / 16000.f;
+				T.InferenceMs = 2.f;
+				OutFinals.Add(T);
+				State->FlushPendingSamples.Add(Pending);
+				++State->FlushesWithAudio;
+			}
+		}
+		Pending = 0;
+		Leave(false);
+		return FPipelineResult::Ok();
+	}
+
+	FPipelineResult FFakeSpeechStream::TakeFinals(TArray<FSpeechTranscript>& OutFinals)
+	{
+		Enter(false);
+		OutFinals.Reset();
+		Leave(false);
+		return FPipelineResult::Ok();
 	}
 
 	FFakePhononModel::FFakePhononModel(TSharedRef<FFakeEngineState, ESPMode::ThreadSafe> InState)

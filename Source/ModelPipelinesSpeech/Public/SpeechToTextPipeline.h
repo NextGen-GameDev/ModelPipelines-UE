@@ -10,6 +10,7 @@
 #include "PipelineBase.h"
 #include "PipelineTypes.h"
 #include "SpeechTypes.h"
+#include "SpeechStream.h"
 #include "SpeechToTextPipeline.generated.h"
 
 class UPipelineTokenizer;
@@ -47,11 +48,23 @@ public:
 	/** Tests/tools: blocking, any thread except the executor worker and the game thread; caller keeps the pipeline alive. */
 	FPipelineResult TranscribeBlocking(TConstArrayView<float> Samples, int32 SampleRate, int32 NumChannels, FSpeechTranscript& Out);
 
+	/** Game thread (docs/contracts.md C81c). Starts a real-time stream on this pipeline (must be ready). Null + OutResult
+	    failure otherwise. Settings are clamped to their ranges. Keep a reference to the returned stream (a UPROPERTY or a
+	    variable): dropping the last reference ends it at the next garbage collection, with no further events. The
+	    "Start Listening" node keeps its own stream alive until Stop Listening. */
+	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Speech")
+	USpeechStream* StartStream(const FSpeechStreamSettings& Settings, FPipelineResult& OutResult);
+
 protected:
 	/** Loads the tokenizer from the package's TokenizerJson. */
 	virtual FPipelineResult OnInitialize(UPipelineModelPackage* InPackage) override;
 
 private:
+	friend class USpeechStream;
+
+	/** WP9R.3: the model behind the Phonon engine path (C81a), or null on the NNE path. */
+	TSharedPtr<IPipelineModel> GetSpeechEngineModel() const;
+
 	/** Game thread: runs the encoder for a call whose front end produced features. */
 	void StartEncoder(const TSharedRef<UE::ModelPipelines::Speech::FSpeechCall, ESPMode::ThreadSafe>& Call);
 

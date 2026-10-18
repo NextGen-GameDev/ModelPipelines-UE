@@ -1018,3 +1018,39 @@ FPipelineResult USpeechToTextPipeline::TranscribeWithEngineBlocking(const TShare
 	R.InferenceMs = Out.InferenceMs;
 	return R;
 }
+
+TSharedPtr<IPipelineModel> USpeechToTextPipeline::GetSpeechEngineModel() const
+{
+	return bUseSpeechEngine ? GetModel() : TSharedPtr<IPipelineModel>();
+}
+
+USpeechStream* USpeechToTextPipeline::StartStream(const FSpeechStreamSettings& Settings, FPipelineResult& OutResult)
+{
+	if (!IsInGameThread())
+	{
+		OutResult = FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("StartStream must be called on the game thread"));
+		return nullptr;
+	}
+	if (!IsReady() || !GetModel().IsValid())
+	{
+		OutResult = FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("the speech-to-text pipeline is not ready (create it from a package first)"));
+		return nullptr;
+	}
+	const TSharedPtr<IPipelineModel> EngineModel = GetSpeechEngineModel();
+	FSpeechStreamSettings Clamped = Settings;
+	// Non-finite settings (Blueprint input) fall back to the defaults BEFORE clamping (FMath::Clamp passes NaN through).
+	const FSpeechStreamSettings Defaults;
+	if (!FMath::IsFinite(Clamped.EndOfSpeechHangoverSeconds)) { Clamped.EndOfSpeechHangoverSeconds = Defaults.EndOfSpeechHangoverSeconds; }
+	if (!FMath::IsFinite(Clamped.PartialIntervalSeconds)) { Clamped.PartialIntervalSeconds = Defaults.PartialIntervalSeconds; }
+	if (!FMath::IsFinite(Clamped.SpeechThresholdDb)) { Clamped.SpeechThresholdDb = Defaults.SpeechThresholdDb; }
+	if (!FMath::IsFinite(Clamped.MaxUtteranceSeconds)) { Clamped.MaxUtteranceSeconds = Defaults.MaxUtteranceSeconds; }
+	Clamped.EndOfSpeechHangoverSeconds = FMath::Clamp(Clamped.EndOfSpeechHangoverSeconds, 0.1f, 2.f);
+	Clamped.PartialIntervalSeconds = FMath::Clamp(Clamped.PartialIntervalSeconds, 0.1f, 5.f);
+	Clamped.SpeechThresholdDb = FMath::Clamp(Clamped.SpeechThresholdDb, 3.f, 40.f);
+	Clamped.MaxUtteranceSeconds = FMath::Clamp(Clamped.MaxUtteranceSeconds, 2.f, 120.f);
+
+	USpeechStream* Stream = NewObject<USpeechStream>(GetTransientPackage());
+	Stream->Start(this, Clamped, EngineModel);
+	OutResult = FPipelineResult::Ok();
+	return Stream;
+}

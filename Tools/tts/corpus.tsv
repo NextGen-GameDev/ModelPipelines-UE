@@ -1,0 +1,170 @@
+dialogue	Hello there, traveler! What brings you to our village?
+dialogue	I wouldn't go into those woods after dark if I were you.
+dialogue	The blacksmith needs more iron ore before he can finish your sword.
+dialogue	Thank you for saving my daughter. Please, take this as a reward.
+dialogue	We should rest here for the night and leave at first light.
+dialogue	Have you seen my brother? He went to the market this morning and never came back.
+dialogue	The bridge is out, so you'll have to take the mountain pass.
+dialogue	Keep your voice down. The guards are listening.
+dialogue	I don't trust him. Something about his story doesn't add up.
+dialogue	If you help me find the missing caravan, I'll make it worth your while.
+dialogue	The king is dead, and the council can't agree on who should rule.
+dialogue	Bring me three wolf pelts and I'll teach you how to make leather armor.
+dialogue	Our scouts report movement along the eastern border.
+dialogue	You look exhausted. Sit down by the fire and have something to eat.
+dialogue	This key opens the door to the old library beneath the cathedral.
+dialogue	Watch your step. The floor here is rotten.
+dialogue	I remember when this whole valley was covered in wheat fields.
+dialogue	Every night the lighthouse keeper climbs the stairs and lights the lamp.
+dialogue	The merchant said he would be back before sunset, but it's already dark.
+dialogue	Follow the river north until you reach the waterfall, then turn east.
+contraction	I'm gonna need a bigger boat.
+contraction	You've got to be kidding me.
+contraction	Y'all better get movin' before they catch up.
+contraction	Ain't nobody coming to save us, kid.
+contraction	We'd've made it if you hadn't stopped to loot every chest.
+contraction	It's not what it looks like, I swear!
+contraction	She'll be fine. She's tougher than she looks.
+contraction	Who's there? Show yourself!
+contraction	They're coming! Lock the gates!
+contraction	Let's get outta here.
+contraction	Wanna know a secret?
+contraction	I dunno, maybe we should've waited.
+contraction	C'mon, it's just a little rain.
+contraction	That's the captain's sword, isn't it?
+contraction	The dogs' bowls are empty again.
+homograph	I read that book last winter, and I'll read it again this winter.
+homograph	Lead the way, and don't forget the lead pipe.
+homograph	The wind was too strong for us to wind the sail.
+homograph	He shed a single tear when he saw the tear in his cloak.
+homograph	Close the door, the wolves are close.
+homograph	The archer took a bow and then drew her bow.
+homograph	We must not desert our post in the desert.
+homograph	I object to carrying that cursed object.
+homograph	The soldier decided to desert his unit.
+homograph	Do you live here, or is this a live performance?
+homograph	The invalid's pass was invalid.
+homograph	Please record your record time on the board.
+homograph	They refuse to move the refuse from the gate.
+homograph	The dove dove into the bushes.
+homograph	Present the present to the queen.
+homograph	He used to live by the sea.
+homograph	Can you produce enough produce for the winter?
+homograph	The minute details took more than a minute.
+homograph	The content of the letter left her content.
+homograph	Does the hunter see the does near the creek?
+number	You have 3 potions left.
+number	That will be 1,250 gold coins.
+number	The tower is 300 feet tall.
+number	Meet me at 10:30 by the fountain.
+number	This sword deals 45 damage.
+number	The war ended in 1999.
+number	You are the 3rd person to ask me that today.
+number	We lost 50% of our supplies.
+number	It costs $5 to cross the bridge.
+number	Level 12 unlocked!
+number	He finished in 2nd place.
+number	The year is 2077 and the city never sleeps.
+number	Wave 7 of 10.
+number	Only 0.5 seconds left on the clock.
+number	Population: 12,000.
+number	Combo x3!
+number	The vault code is 4 8 15 16 23 42.
+number	There are 100 steps to the top.
+number	Chapter 4: The Long Night.
+number	Room 101 is at the end of the hall.
+jargon	Your HP is low, drink a potion!
+jargon	You gained 500 XP.
+jargon	Talk to the NPC near the inn.
+jargon	The new DLC adds three dungeons.
+jargon	Watch out for the boss's AoE attack.
+jargon	Do you want to queue for PvP?
+jargon	Equip the +2 dagger.
+jargon	Press X to jump.
+jargon	Check the HUD for your objectives.
+jargon	The AI companion will follow you.
+jargon	Save your game before the cutscene.
+jargon	He's camping the respawn point.
+jargon	That's a critical hit!
+jargon	Your mana regenerates over time.
+jargon	The quest log has been updated.
+jargon	Lv. 5 required.
+jargon	This item has a cooldown of 30 seconds.
+jargon	Achievement unlocked: Dragon Slayer.
+jargon	You need the GPU upgrade to run the simulation.
+jargon	Status: poisoned.
+name	The dragon Vaelthorn guards the pass.
+name	Welcome to Ashkaran, the city of brass.
+name	Lady Elowen of Brightwater sends her regards.
+name	The Zhar'kul tribe raids the northern farms.
+name	Seek the oracle in Myrrhdale.
+name	Captain Thessaly Vorne commands the fleet.
+name	The sword Gloomreaver was forged in Kaz Durath.
+name	Beware the Xyloth, ancient spawn of the void.
+name	Princess Aeliana fled to Silverbrook.
+name	Old Grimbald runs the tavern in Oakhollow.
+name	Kael'thas betrayed the Sunreaver order.
+name	The Ironfang clan rides at dawn.
+name	Travel to Nethervale by way of the Shimmering Coast.
+name	Arch-mage Quillon Fennwick teaches at the academy.
+name	The goddess Ysmeralda watches over sailors.
+name	Druin and Torvald are waiting at the gate.
+name	The capital, Valorhaven, has fallen.
+name	Speak with Elder Morwen in Thistlewood.
+name	The Vey'ruun crystals are humming again.
+name	Ser Brannoch swore an oath to House Calderwyn.
+caps	RUN!
+caps	GET DOWN!
+caps	Do NOT open that door.
+caps	I said NO!
+caps	HELP! SOMEBODY HELP ME!
+caps	FIRE IN THE HOLE!
+caps	This is NOT a drill.
+caps	WATCH OUT!
+caps	The ORDER of the PHOENIX meets tonight.
+caps	STOP right there, criminal scum!
+interjection	Hmm, interesting.
+interjection	Ugh, not again.
+interjection	Argh! My leg!
+interjection	Shh, they'll hear us.
+interjection	Pfft, you call that a sword?
+interjection	Heh, nice try.
+interjection	Mmhm, I see.
+interjection	Whoa, look at that!
+interjection	Oof, that's gotta hurt.
+interjection	Huh? Who said that?
+interjection	Aha! I knew it!
+interjection	Uh-oh.
+interjection	Eww, what is that smell?
+interjection	Yikes.
+interjection	Phew, that was close.
+punct	Wait... did you hear that?
+punct	He said, "Never come back here."
+punct	I—I can't do this anymore.
+punct	Gold, silver, gems; take whatever you want.
+punct	Is it over? Is it really over?!
+punct	Three things: courage, wisdom, and luck.
+punct	"Run," she whispered.
+punct	Well... that went well.
+punct	No. No, no, no!
+punct	The answer (if there is one) lies below.
+scifi	The hyperdrive is offline, captain.
+scifi	Reroute power to the forward shields.
+scifi	The android's neural matrix is failing.
+scifi	Initiating quantum jump in five seconds.
+scifi	Our sensors detect a cloaked vessel off the port bow.
+scifi	The colony on Kepler-442b has gone dark.
+scifi	Upload the schematics to the mainframe.
+scifi	The nanobots are self-replicating.
+scifi	Synthetic biology changed everything.
+scifi	Plasma rifles are useless against their armor.
+hyphen	The half-elf ranger nodded.
+hyphen	It's a one-of-a-kind blade.
+hyphen	The well-known bard sang all night.
+hyphen	A twenty-three-year-old recruit joined the squad.
+hyphen	She's a self-taught healer.
+hyphen	The so-called hero ran away.
+hyphen	Get the long-range rifle.
+hyphen	It was a hit-and-run attack.
+hyphen	The ice-cold water woke him up.
+hyphen	He's a hard-working blacksmith.

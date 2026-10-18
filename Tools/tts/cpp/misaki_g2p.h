@@ -278,6 +278,8 @@ public:
     }
 
     std::optional<U> lookup_plain(const U& w) const { return lookup(w, "", std::nullopt, nullptr); }
+    // Letter names, stress on the last ("PvP" -> pˌivˌipˈi), as misaki reads unknown acronyms.
+    std::optional<U> spell(const U& w) const { return get_nnp(w); }
 
 private:
     struct Entry { std::optional<U> plain; std::unordered_map<std::string, std::optional<U>> tagged; };
@@ -639,40 +641,24 @@ public:
                 ctx = token_context(ctx, w.phonemes, w);
                 continue;
             }
-            auto& w = it.toks;
-            size_t left = 0, right = w.size();
-            bool should_fallback = false;
-            while (left < right) {
-                std::optional<Token> tk;
-                bool blocked = false;
-                for (size_t i = left; i < right; ++i) if (w[i].alias || w[i].phonemes) blocked = true;
-                if (!blocked) tk = merge(w, left, right, false);
-                std::optional<U> ps = tk ? lex_(*tk, ctx) : std::nullopt;
-                if (ps) {
-                    w[left].phonemes = ps;
-                    for (size_t i = left + 1; i < right; ++i) w[i].phonemes = U"";
-                    ctx = token_context(ctx, ps, *tk);
-                    right = left;
-                    left = 0;
-                } else if (left + 1 < right) {
-                    ++left;
-                } else {
-                    --right;
-                    Token& t = w[right];
-                    if (!t.phonemes) {
-                        if (std::all_of(t.text.begin(), t.text.end(), [](char32_t c) { return in(SUBTOKEN_JUNKS, c); })) t.phonemes = U"";
-                        else if (fallback_) { should_fallback = true; break; }
-                    }
-                    left = 0;
-                }
+            const std::vector<Token> before = it.toks;
+            const Ctx ctx_before = ctx;
+            if (!resolve_group(it.toks, ctx, static_cast<bool>(fallback_))) {
+                resolve_tokens(it.toks);
+                continue;
             }
-            if (should_fallback) {
-                const Token merged = merge(w, 0, w.size(), false);
-                w[0].phonemes = fallback_(merged);
-                for (size_t i = 1; i < w.size(); ++i) w[i].phonemes = U"";
-            } else {
-                resolve_tokens(w);
+            const Token merged = merge(it.toks, 0, it.toks.size(), false);
+            if (auto ps = fallback_(merged)) {
+                it.toks[0].phonemes = ps;
+                for (size_t i = 1; i < it.toks.size(); ++i) it.toks[i].phonemes = U"";
+                continue;
             }
+            // Fallback has no reading for the whole word ("10:30", "I—I"): keep the parts the lexicon
+            // resolves, as misaki does without a fallback (espeak would read the whole word).
+            it.toks = before;
+            ctx = ctx_before;
+            resolve_group(it.toks, ctx, false);
+            resolve_tokens(it.toks);
         }
         U result;
         for (auto& it : items) {
@@ -687,6 +673,37 @@ private:
     struct Item { bool is_list; std::vector<Token> toks; };
     const Lexicon& lex_;
     Fallback fallback_;
+
+    // misaki's merge loop for tokens written without spaces between them: longest lexicon match from the right.
+    // Returns true when a part stays unresolved and use_fallback is set (misaki then falls back on the whole word).
+    bool resolve_group(std::vector<Token>& w, Ctx& ctx, bool use_fallback) const {
+        size_t left = 0, right = w.size();
+        while (left < right) {
+            std::optional<Token> tk;
+            bool blocked = false;
+            for (size_t i = left; i < right; ++i) if (w[i].alias || w[i].phonemes) blocked = true;
+            if (!blocked) tk = merge(w, left, right, false);
+            std::optional<U> ps = tk ? lex_(*tk, ctx) : std::nullopt;
+            if (ps) {
+                w[left].phonemes = ps;
+                for (size_t i = left + 1; i < right; ++i) w[i].phonemes = U"";
+                ctx = token_context(ctx, ps, *tk);
+                right = left;
+                left = 0;
+            } else if (left + 1 < right) {
+                ++left;
+            } else {
+                --right;
+                Token& t = w[right];
+                if (!t.phonemes) {
+                    if (std::all_of(t.text.begin(), t.text.end(), [](char32_t c) { return in(SUBTOKEN_JUNKS, c); })) t.phonemes = U"";
+                    else if (use_fallback) return true;
+                }
+                left = 0;
+            }
+        }
+        return false;
+    }
 
     // merge_tokens; with_unk: also join phonemes ('' for missing ones), as the final merge does.
     static Token merge(const std::vector<Token>& w, size_t a, size_t b, bool with_unk) {

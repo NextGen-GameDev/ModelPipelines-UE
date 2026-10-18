@@ -1,7 +1,8 @@
 #pragma once
 // Fallback for words misaki's lexicon cannot resolve (misaki calls espeak-ng here): a trailing apostrophe is
-// dropped ("movin'"), clitics are split off a known host ("should've"), unknown compounds of known words are
-// split ("Oakhollow" = oak + hollow), and anything else goes to the neural guesser (larroy's g2p_en port).
+// dropped ("movin'"), short words with capitals inside are spelled ("PvP"), clitics are split off a known host
+// ("should've"), unknown compounds of known words are split ("Oakhollow" = oak + hollow), and anything else goes
+// to the neural guesser (larroy's g2p_en port).
 #include "misaki_g2p.h"
 
 #include <functional>
@@ -46,6 +47,9 @@ inline G2P::Fallback make_fallback(const Lexicon& lex, Guesser guess) {
             Token t = tk;
             t.text = w;
             if (auto ps = lex(t, Ctx{})) return ps;
+        }
+        if (w.size() <= 5 && all_letters(w) && std::any_of(w.begin() + 1, w.end(), is_upper)) {
+            if (auto ps = lex.spell(w)) return ps;
         }
         static const std::vector<std::pair<U, U>> CLITICS = {
             {U"'ve", U"əv"}, {U"'d", U"d"}, {U"'ll", U"l"}, {U"'re", U"əɹ"}, {U"'m", U"m"}};

@@ -1,2 +1,9 @@
 # Word differences from the misaki + espeak-ng reference that are intentional: the reference is wrong.
 # ref phonemes<TAB>our phonemes<TAB>why. compare.py counts these separately from errors.
+ˈW ˈi	ˌAˌOˈi	AoE: area of effect, said as letters (game_words.tsv); misaki splits Ao + E
+pˌivˈi pˈi	pˌivˌipˈi	PvP: both spell the letters; ours as one word (fallback.h spells short mixed-case words)
+ˌɛlvˈi	lˈɛvᵊl	Lv.: level (game_words.tsv); the reference spells L-V
+ˈɑɹɡ	ˈɑɹ	argh: silent gh (game_words.tsv)
+ˌɛsˌAʧˈAʧ	ʃʃ	Shh: the reference spells S-H-H
+ˌɛmˌɛmˌAʧˈɛm	mhmm	Mmhm: the reference spells M-M-H-M
+jˈuwə	jˈɪw	Eww: as misaki's own "ew"

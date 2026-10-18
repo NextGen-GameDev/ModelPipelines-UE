@@ -854,9 +854,14 @@ void FSpeechStreamSpec::Define()
 			FSpeechStreamSettings S; S.bPartials = false; S.MaxUtteranceSeconds = 120.f;
 			USpeechStream* St = Open(S);
 			if (!St) { Done.ExecuteIfBound(); return; }
+			// Lead fix 2026-10-18: a constant tone becomes the noise floor after ~3 s (150-frame min tracking), so the VAD ended the
+			// utterance and the engine never queued 10 s; the test only passed when the front end lagged. Every 10th chunk is now
+			// 0.1 s of silence: shorter than the hangover (one utterance continues), and it keeps the floor low, so the engine path
+			// must queue > 10 s and drop deterministically.
 			TArray<float> Chunk; MakeToneSamples(Chunk, 1600, 16000, 440.0, 0.2);
+			TArray<float> Gap; Gap.SetNumZeroed(1600);
 			const double T0 = FPlatformTime::Seconds();
-			for (int32 i = 0; i < 400; ++i) { St->PushAudio(Chunk, 16000, 1); }
+			for (int32 i = 0; i < 400; ++i) { St->PushAudio(i % 10 == 9 ? Gap : Chunk, 16000, 1); }
 			const double PushSeconds = FPlatformTime::Seconds() - T0;
 			TestTrue(*FString::Printf(TEXT("producer did not block: 40 s of audio pushed in %.2f s"), PushSeconds), PushSeconds < 5.0);
 			St->Stop();

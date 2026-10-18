@@ -252,8 +252,10 @@ void FSpeechListenSpec::Define()
 			TestTrue(TEXT("derives from UCancellableAsyncAction"), C->IsChildOf(UCancellableAsyncAction::StaticClass()));
 			UFunction* F = C->FindFunctionByName(TEXT("StartListening"));
 			if (!TestNotNull(TEXT("StartListening UFUNCTION exists"), F)) { return; }
+#if WITH_METADATA   // metadata exists only in editor builds; game targets compile the tests too
 			TestTrue(TEXT("BlueprintInternalUseOnly"), F->HasMetaData(TEXT("BlueprintInternalUseOnly")));
 			TestEqual(TEXT("DisplayName"), F->GetMetaData(TEXT("DisplayName")), FString(TEXT("Start Listening")));
+#endif
 			TestTrue(TEXT("BlueprintCallable"), F->HasAnyFunctionFlags(FUNC_BlueprintCallable));
 
 			const TCHAR* Pins[] = { TEXT("OnSpeechStarted"), TEXT("OnPartial"), TEXT("OnFinal"), TEXT("OnSpeechEnded"), TEXT("OnStopped"), TEXT("OnFailure") };
@@ -275,13 +277,17 @@ void FSpeechListenSpec::Define()
 			UFunction* Stop = USpeechPipelineLibrary::StaticClass()->FindFunctionByName(TEXT("StopListening"));
 			if (TestNotNull(TEXT("StopListening on USpeechPipelineLibrary"), Stop))
 			{
+#if WITH_METADATA
 				TestEqual(TEXT("DisplayName"), Stop->GetMetaData(TEXT("DisplayName")), FString(TEXT("Stop Listening")));
+#endif
 				TestTrue(TEXT("static"), Stop->HasAnyFunctionFlags(FUNC_Static));
 			}
 			UFunction* Push = USpeechStream::StaticClass()->FindFunctionByName(TEXT("PushAudioArray"));
 			if (TestNotNull(TEXT("PushAudioArray on USpeechStream"), Push))
 			{
+#if WITH_METADATA
 				TestEqual(TEXT("DisplayName"), Push->GetMetaData(TEXT("DisplayName")), FString(TEXT("Push Speech Audio")));
+#endif
 				TestTrue(TEXT("BlueprintCallable"), Push->HasAnyFunctionFlags(FUNC_BlueprintCallable));
 			}
 			TestNotNull(TEXT("GetStream UFUNCTION"), USpeechListenAsyncAction::StaticClass()->FindFunctionByName(TEXT("GetStream")));

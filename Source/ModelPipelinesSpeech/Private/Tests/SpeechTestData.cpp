@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "SpeechTestData.h"
+#include "SpeechFakeEngine.h"
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -626,6 +627,24 @@ namespace UE::ModelPipelines::SpeechTests
 		OutSamples.SetNumUninitialized(Rec.NumSamples);
 		if (Rec.NumSamples > 0) { FMemory::Memcpy(OutSamples.GetData(), Bytes.GetData(), Bytes.Num()); }
 		return true;
+	}
+
+	UPipelineModelPackage* MakeFakePhononPackage()
+	{
+		UPipelineModelPackage* Pkg = NewObject<UPipelineModelPackage>(GetTransientPackage());
+		Pkg->Task = EPipelineTask::SpeechToText;
+		Pkg->PreferredDevice = EPipelineDevice::CPU;
+		Pkg->GgufModel = NewObject<USpeechTestPhononFileModel>(GetTransientPackage());
+		return Pkg;
+	}
+
+	void MakeToneSamples(TArray<float>& Out, int32 NumFrames, int32 Rate, double Freq, double Amp)
+	{
+		Out.SetNumUninitialized(FMath::Max(NumFrames, 0));
+		for (int32 i = 0; i < Out.Num(); ++i)
+		{
+			Out[i] = (float)(Amp * FMath::Sin(2.0 * UE_DOUBLE_PI * Freq * (double)i / (double)Rate));
+		}
 	}
 }
 

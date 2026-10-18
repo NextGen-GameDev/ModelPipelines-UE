@@ -55,6 +55,16 @@ private:
 	/** Game thread: runs the encoder for a call whose front end produced features. */
 	void StartEncoder(const TSharedRef<UE::ModelPipelines::Speech::FSpeechCall, ESPMode::ThreadSafe>& Call);
 
+	/** Game thread, after validation (C81a rule 2): mono mix + silence gate on a worker, then one engine session. */
+	void TranscribeWithEngine(const TSharedRef<UE::ModelPipelines::Speech::FSpeechCall, ESPMode::ThreadSafe>& Call);
+
+	/** Blocking variant of the engine path (C81a rule 2), for TranscribeBlocking. */
+	FPipelineResult TranscribeWithEngineBlocking(const TSharedRef<UE::ModelPipelines::Speech::FSpeechCall, ESPMode::ThreadSafe>& Call,
+		FSpeechTranscript& Out);
+
+	/** Set by OnInitialize: the package is in Phonon format and calls go to the model's ISpeechEngine (C81a). */
+	bool bUseSpeechEngine = false;
+
 	/** Keeps the tokenizer reachable for GC (the shared state also holds a TStrongObjectPtr to it). */
 	UPROPERTY()
 	TObjectPtr<UPipelineTokenizer> Tokenizer;

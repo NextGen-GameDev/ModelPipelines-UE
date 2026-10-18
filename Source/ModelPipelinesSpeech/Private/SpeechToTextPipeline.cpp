@@ -17,6 +17,7 @@
 #include "PipelineTensor.h"
 #include "PipelineTokenizer.h"
 #include "SpeechDecodeSession.h"
+#include "SpeechEngineSession.h"
 #include "SpeechSoundWaveDecode.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SpeechToTextPipeline)
@@ -137,8 +138,8 @@ namespace UE::ModelPipelines::Speech
 			return FPipelineResult::Ok();
 		}
 
-		/** C75 step 2 (any thread): mono, resample, silence gate, log-mel. Sets bGated or Features. Frees Samples. */
-		static FPipelineResult RunFrontEnd(FSpeechCall& Call)
+		/** C75 step 2 head (any thread): the non-finite scan and the C73 mono mix. Frees Samples on success. */
+		static FPipelineResult ScanAndMixToMono(FSpeechCall& Call, TArray<float>& Mono)
 		{
 			// C75 step 1, last check: done here so the game thread never scans the samples. Before any inference.
 			int32 NonFinite = 0;
@@ -156,12 +157,24 @@ namespace UE::ModelPipelines::Speech
 			}
 
 			FString Err;
-			TArray<float> Mono;
 			if (!MixToMono(Call.Samples, Call.NumChannels, Mono, Err))
 			{
 				return FPipelineResult::Fail(EPipelineError::InvalidArgument, Err);
 			}
 			Call.Samples.Empty();
+			return FPipelineResult::Ok();
+		}
+
+		/** C75 step 2 (any thread): mono, resample, silence gate, log-mel. Sets bGated or Features. Frees Samples. */
+		static FPipelineResult RunFrontEnd(FSpeechCall& Call)
+		{
+			TArray<float> Mono;
+			const FPipelineResult Mixed = ScanAndMixToMono(Call, Mono);
+			if (!Mixed.bSuccess)
+			{
+				return Mixed;
+			}
+			FString Err;
 			TArray<float> Resampled;
 			if (!Resample(Mono, Call.SampleRate, Call.Speech.SampleRate, Resampled, Err))
 			{
@@ -521,6 +534,61 @@ namespace UE::ModelPipelines::Speech
 		}
 	}
 
+	namespace PipelinePrivate
+	{
+		/** C81a: the call's settings and duration for the engine path (no tokenizer, no decoder). */
+		static void PrepareEngineCall(FSpeechCall& Call, const FPipelineSpeechSettings& Speech)
+		{
+			Call.Speech = Speech;
+			Call.AudioSeconds = Call.NumChannels > 0 && Call.SampleRate > 0
+				? (float)((double)(Call.Samples.Num() / Call.NumChannels) / (double)Call.SampleRate) : 0.f;
+		}
+
+		/** C81a rule 2: silence gate on the whole mono signal (same gate switch as the NNE windows). True -> empty success. */
+		static bool IsSilentForEngine(const FSpeechCall& Call, TConstArrayView<float> Mono)
+		{
+			if (Mono.Num() == 0)
+			{
+				return true;
+			}
+			const bool bGateOn = Call.Speech.SilenceThresholdDb > -100.f;
+			return bGateOn && ComputeRmsDbfs(Mono) < Call.Speech.SilenceThresholdDb;
+		}
+
+		/** Game thread: one engine session on the executor (C61); OnDone after it completes. Call->Mono is moved into it. */
+		static void StartEngineSession(const FSpeechCallRef& Call, const TSharedPtr<IPipelineModel>& Model)
+		{
+			const TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> Executor = FPipelineExecutor::TryGetShared();
+			if (!Executor.IsValid())
+			{
+				DeliverFailure(*Call, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the executor has shut down")));
+				return;
+			}
+			const TSharedRef<FSpeechEngineSession, ESPMode::ThreadSafe> Session =
+				MakeShared<FSpeechEngineSession, ESPMode::ThreadSafe>(Model, MoveTemp(Call->Mono), Call->SampleRate);
+			FPipelineSessionCallbacks Callbacks;
+			Callbacks.OnComplete = [Call, Session](const FPipelineResult& Result)
+			{
+				if (!Result.bSuccess)
+				{
+					DeliverFailure(*Call, Result);
+					return;
+				}
+				FSpeechTranscript Transcript = Session->GetTranscript();
+				Transcript.AudioSeconds = Call->AudioSeconds;
+				FPipelineResult Final = Result;
+				Final.InferenceMs = Transcript.InferenceMs;
+				Deliver(*Call, Final, Transcript);
+			};
+			// No Owner: the call must complete even when the pipeline is destroyed meanwhile (C75).
+			const FPipelineJobId Id = Executor->EnqueueSession(Session, MoveTemp(Callbacks), nullptr);
+			if (Id == 0)
+			{
+				DeliverFailure(*Call, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the executor has shut down")));
+			}
+		}
+	}
+
 	FSpeechCall::~FSpeechCall()
 	{
 		if (!OnDone)
@@ -557,6 +625,20 @@ FPipelineResult USpeechToTextPipeline::OnInitialize(UPipelineModelPackage* InPac
 	if (!InPackage)
 	{
 		return FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("package is null"));
+	}
+	bUseSpeechEngine = false;
+	if (InPackage->GetModelFormat() == EPipelineModelFormat::Phonon)
+	{
+		// C81a rule 1: no tokenizer and no decoder; the base class prepared the model through the Phonon backend.
+		if (!GetModel().IsValid())
+		{
+			return FPipelineResult::Fail(EPipelineError::Internal,
+				FString::Printf(TEXT("package '%s': the Phonon model was not prepared"), *InPackage->GetName()));
+		}
+		Tokenizer = nullptr;
+		SpeechState.Reset();
+		bUseSpeechEngine = true;
+		return FPipelineResult::Ok();
 	}
 	if (InPackage->TokenizerJson.IsEmpty())
 	{
@@ -621,7 +703,14 @@ void USpeechToTextPipeline::Transcribe(TArray<float> Samples, int32 SampleRate, 
 		: FPipelineResult::Fail(EPipelineError::InvalidArgument, TEXT("USpeechToTextPipeline::Transcribe must be called on the game thread"));
 	if (Check.bSuccess)
 	{
-		Check = PrepareCall(*Call, SpeechState, GetSpeechSettings(), GetDecoderModel());
+		if (bUseSpeechEngine)
+		{
+			PrepareEngineCall(*Call, GetSpeechSettings());
+		}
+		else
+		{
+			Check = PrepareCall(*Call, SpeechState, GetSpeechSettings(), GetDecoderModel());
+		}
 	}
 	if (!Check.bSuccess)
 	{
@@ -631,6 +720,11 @@ void USpeechToTextPipeline::Transcribe(TArray<float> Samples, int32 SampleRate, 
 	if (Call->Samples.Num() == 0)
 	{
 		DeliverLater(Call, FPipelineResult::Ok(), EmptyTranscript(*Call));
+		return;
+	}
+	if (bUseSpeechEngine)
+	{
+		TranscribeWithEngine(Call);
 		return;
 	}
 
@@ -774,6 +868,16 @@ FPipelineResult USpeechToTextPipeline::TranscribeBlocking(TConstArrayView<float>
 	Call->Samples = TArray<float>(Samples.GetData(), Samples.Num());
 	Call->SampleRate = SampleRate;
 	Call->NumChannels = NumChannels;
+	if (bUseSpeechEngine)
+	{
+		PrepareEngineCall(*Call, GetSpeechSettings());
+		if (Call->Samples.Num() == 0)
+		{
+			Out = EmptyTranscript(*Call);
+			return FPipelineResult::Ok();
+		}
+		return TranscribeWithEngineBlocking(Call, Out);
+	}
 	Check = PrepareCall(*Call, SpeechState, GetSpeechSettings(), GetDecoderModel());
 	if (!Check.bSuccess)
 	{
@@ -838,4 +942,79 @@ FPipelineResult USpeechToTextPipeline::TranscribeBlocking(TConstArrayView<float>
 		Out = MoveTemp(Transcript);
 	}
 	return Final;
+}
+
+void USpeechToTextPipeline::TranscribeWithEngine(const TSharedRef<UE::ModelPipelines::Speech::FSpeechCall, ESPMode::ThreadSafe>& Call)
+{
+	using namespace UE::ModelPipelines::Speech;
+	using namespace UE::ModelPipelines::Speech::PipelinePrivate;
+
+	TSharedPtr<IPipelineModel> Model = GetModel();
+	TWeakObjectPtr<USpeechToTextPipeline> WeakThis(this);
+	// C81a rule 2: non-finite scan, mono mix and the whole-call silence gate on a worker; no resampling (the engine does it).
+	UE::Tasks::Launch(TEXT("ModelPipelinesSpeechEngineFrontEnd"), [Call = FSpeechCallRef(Call), Model = MoveTemp(Model), WeakThis]() mutable
+	{
+		TArray<float> Mono;
+		const FPipelineResult FrontEnd = ScanAndMixToMono(*Call, Mono);
+		const bool bGated = FrontEnd.bSuccess && IsSilentForEngine(*Call, Mono);
+		if (FrontEnd.bSuccess && !bGated)
+		{
+			Call->Mono = MoveTemp(Mono);
+		}
+		AsyncTask(ENamedThreads::GameThread, [Call = MoveTemp(Call), Model = MoveTemp(Model), WeakThis, FrontEnd, bGated]()
+		{
+			if (!FrontEnd.bSuccess)
+			{
+				DeliverFailure(*Call, FrontEnd);
+				return;
+			}
+			if (bGated)
+			{
+				Deliver(*Call, FPipelineResult::Ok(), EmptyTranscript(*Call));
+				return;
+			}
+			if (!WeakThis.IsValid())
+			{
+				DeliverFailure(*Call, FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the pipeline was destroyed before inference")));
+				return;
+			}
+			StartEngineSession(Call, Model);
+		});
+	});
+}
+
+FPipelineResult USpeechToTextPipeline::TranscribeWithEngineBlocking(const TSharedRef<UE::ModelPipelines::Speech::FSpeechCall, ESPMode::ThreadSafe>& Call,
+	FSpeechTranscript& Out)
+{
+	using namespace UE::ModelPipelines::Speech;
+	using namespace UE::ModelPipelines::Speech::PipelinePrivate;
+
+	TArray<float> Mono;
+	const FPipelineResult FrontEnd = ScanAndMixToMono(*Call, Mono);
+	if (!FrontEnd.bSuccess)
+	{
+		return FrontEnd;
+	}
+	if (IsSilentForEngine(*Call, Mono))
+	{
+		Out = EmptyTranscript(*Call);
+		return FPipelineResult::Ok();
+	}
+	const TSharedPtr<FPipelineExecutor, ESPMode::ThreadSafe> Executor = FPipelineExecutor::TryGetShared();
+	if (!Executor.IsValid())
+	{
+		return FPipelineResult::Fail(EPipelineError::Cancelled, TEXT("the executor has shut down"));
+	}
+	const TSharedRef<FSpeechEngineSession, ESPMode::ThreadSafe> Session =
+		MakeShared<FSpeechEngineSession, ESPMode::ThreadSafe>(GetModel(), MoveTemp(Mono), Call->SampleRate);
+	TArray<FPipelineSessionProgress> Progress;
+	FPipelineResult R = Executor->RunSessionBlocking(Session, Progress);
+	if (!R.bSuccess)
+	{
+		return R;
+	}
+	Out = Session->GetTranscript();
+	Out.AudioSeconds = Call->AudioSeconds;
+	R.InferenceMs = Out.InferenceMs;
+	return R;
 }

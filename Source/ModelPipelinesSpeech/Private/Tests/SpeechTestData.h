@@ -168,6 +168,17 @@ namespace UE::ModelPipelines::SpeechTests
 
 	/** The 16 kHz mono samples of a long recording (num_samples float32). False + OutError (path + generator command). Any thread. */
 	bool LoadLongAudio(const FSttLongGoldens& G, const FSttLongRecording& Rec, TArray<float>& OutSamples, FString& OutError);
+
+	// ---- WP9R.2: fake Phonon package ----
+
+	/**
+	 * A NEW transient SpeechToText package in Phonon format: GgufModel = a USpeechTestPhononFileModel (fake path/size/sha), no
+	 * NNE model, no decoder, no tokenizer, default Speech settings, PreferredDevice CPU. Game thread. The caller keeps it alive.
+	 */
+	UPipelineModelPackage* MakeFakePhononPackage();
+
+	/** NumFrames samples of Amp*sin(2*pi*Freq*i/Rate), mono. */
+	void MakeToneSamples(TArray<float>& Out, int32 NumFrames, int32 Rate, double Freq, double Amp);
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

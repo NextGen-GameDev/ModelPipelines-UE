@@ -615,7 +615,7 @@ void FSpeechStreamSpec::Define()
 
 		LatentIt("FinalAudioIsPreRollPlusBurstPlusHangover", LatentLimit, [this](const FDoneDelegate& Done)
 		{
-			// One exactly 1.0 s tone burst. The audio flushed into the engine is pre-roll 0.3 + 1.0 + hangover 0.3 = 25600 samples;
+			// One exactly 1.0 s tone burst. The audio flushed into the engine is pre-roll 0.3 + 1.0 + hangover 0.2 (default since 2026-10-18) = 24000 samples;
 			// accept [19000, 29000]. Fewer means the pre-roll/onset was cut off, many more means silence was fed for the whole stream.
 			if (!Pipe.IsValid()) { Done.ExecuteIfBound(); return; }
 			FSpeechStreamSettings S; S.bPartials = false;
@@ -628,7 +628,7 @@ void FSpeechStreamSpec::Define()
 				if (State->FlushPendingSamples.Num() == 1)
 				{
 					const int64 N = State->FlushPendingSamples[0];
-					TestTrue(*FString::Printf(TEXT("flushed %lld samples, expected ~25600 in [19000, 29000]"), (long long)N), N >= 19000 && N <= 29000);
+					TestTrue(*FString::Printf(TEXT("flushed %lld samples, expected ~24000 in [19000, 29000]"), (long long)N), N >= 19000 && N <= 29000);
 				}
 				else { AddError(FString::Printf(TEXT("expected exactly 1 flush with audio, got %d"), State->FlushPendingSamples.Num())); }
 			});

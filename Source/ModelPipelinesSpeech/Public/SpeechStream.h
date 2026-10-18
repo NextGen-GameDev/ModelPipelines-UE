@@ -29,7 +29,7 @@ struct MODELPIPELINESSPEECH_API FSpeechStreamSettings
 
 	/** Silence after the last speech that ends an utterance, seconds (0.1..2). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
-	float EndOfSpeechHangoverSeconds = 0.3f;
+	float EndOfSpeechHangoverSeconds = 0.2f;
 
 	/** New speech audio between two partial transcripts, seconds (0.1..5). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")

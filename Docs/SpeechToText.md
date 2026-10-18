@@ -149,7 +149,7 @@ Real-time speech listens to a microphone, or to audio you push, and sends text e
 
 ### How it works
 
-An energy voice-activity detector cuts the audio into utterances. It works on 20 ms frames. A frame counts as speech when it is 12 dB over a running noise floor and above -55 dBFS. An utterance starts after 60 ms of speech and includes 0.3 s of audio from before that point (pre-roll). It ends after 0.3 s of silence. An utterance is cut at 30 s.
+An energy voice-activity detector cuts the audio into utterances. It works on 20 ms frames. A frame counts as speech when it is 12 dB over a running noise floor and above -55 dBFS. An utterance starts after 60 ms of speech and includes 0.3 s of audio from before that point (pre-roll). It ends after 0.2 s of silence by default. An utterance is cut at 30 s.
 
 Events arrive on the game thread. For each utterance the order is: Speech Started, Partial (zero or more), Speech Ended, Final. Stopped comes once, at the end.
 
@@ -182,7 +182,7 @@ All pins: [Nodes](Nodes.md#start-listening).
 
 | Setting | Default | Range | Meaning |
 |---|---|---|---|
-| `EndOfSpeechHangoverSeconds` | 0.3 | 0.1 to 2 | Silence that ends an utterance. |
+| `EndOfSpeechHangoverSeconds` | 0.2 | 0.1 to 2 | Silence that ends an utterance. |
 | `PartialIntervalSeconds` | 0.5 | 0.1 to 5 | New speech audio between two partials. |
 | `bPartials` | true | | Ask for partials. An engine without partials ignores it. |
 | `SpeechThresholdDb` | 12 | 3 to 40 | Speech level over the noise floor. |
@@ -190,9 +190,20 @@ All pins: [Nodes](Nodes.md#start-listening).
 
 ### Speed with the ONNX engine (stage A)
 
-Decoding takes about 0.15 to 0.4 s per utterance on a CPU. The final text arrives after the 0.3 s hangover plus the decode time. See the latency table below.
+The final text arrives after the 0.2 s hangover plus the decode time. The decode time grows with the length of the utterance.
 
-<!-- latency: WP9R.5a -->
+### Latency
+
+Measured on an Intel i7-11800H laptop CPU (8 cores), audio pushed at real-time speed, default settings. Latency is the time from the end of speech to **On Final**. Partial lag is the time from the end of a spoken word to the first partial text that contains it.
+
+| Engine | Audio | Final text p50 / p90 | Partial lag p50 / p90 | WER |
+|---|---|---|---|---|
+| ONNX (stage A, free) | 12 short phrases, 2.4 to 3.9 s each | 0.60 / 0.65 s | no partials | 1.8 % |
+| ONNX (stage A, free) | 45 s of read speech, 8 utterances | 0.53 / 0.82 s | no partials | 0.9 % |
+| Phonon (stage B, ModelPipelines Generative) | 12 short phrases | 0.28 / 0.28 s | not measured | 1.8 % |
+| Phonon (stage B, ModelPipelines Generative) | 45 s of read speech | 0.32 / 0.38 s | 0.16 / 0.52 s | 0.9 % |
+
+A longer `EndOfSpeechHangoverSeconds` adds its difference to every final. A shorter one can split a sentence at a pause.
 
 ### Limits
 

@@ -20,9 +20,9 @@ FPipelineModelSource FPipelineModelSource::FromPackage(const UPipelineModelPacka
 	{
 		Source.NNEModel = Package->Model.Get();
 	}
-	else if (Source.Format == EPipelineModelFormat::GGUF)
+	else if (Source.Format == EPipelineModelFormat::GGUF || Source.Format == EPipelineModelFormat::Phonon)
 	{
-		// GetModelFormat returned GGUF, so GgufModel is set and implements the interface.
+		// GetModelFormat returned GGUF or Phonon, so GgufModel is set and implements the interface.
 		const IPipelineFileModel* File = Cast<IPipelineFileModel>(Package->GgufModel.Get());
 		if (File != nullptr)
 		{
@@ -52,6 +52,7 @@ TSharedPtr<IPipelineModel> IPipelineBackend::PrepareModelFromSource(const FPipel
 		return PrepareModel(Source.NNEModel, Device, OutResult);
 	}
 	OutResult = FPipelineResult::Fail(EPipelineError::RuntimeUnavailable, FString::Printf(TEXT("backend %s cannot prepare a %s model"),
-		*GetName().ToString(), Source.Format == EPipelineModelFormat::GGUF ? TEXT("GGUF") : TEXT("format None")));
+		*GetName().ToString(), Source.Format == EPipelineModelFormat::GGUF ? TEXT("GGUF")
+		: Source.Format == EPipelineModelFormat::Phonon ? TEXT("Phonon") : TEXT("format None")));
 	return nullptr;
 }

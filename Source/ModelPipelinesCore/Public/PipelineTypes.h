@@ -51,7 +51,10 @@ enum class EPipelineModelFormat : uint8
 	/** UNNEModelData (ONNX through NNE). */
 	NNE = 1,
 	/** A loose .gguf file described by a pointer asset implementing IPipelineFileModel. */
-	GGUF = 2
+	GGUF = 2,
+	/** A loose Phonon weights folder (weights.bin, weights.json, tokens.txt) described by a pointer asset implementing
+	    IPipelineFileModel (C81a). Run by the ModelPipelines Generative plugin. */
+	Phonon = 3
 };
 
 /** Result returned by every pipeline API. A default-constructed result is a failure with Error None. */

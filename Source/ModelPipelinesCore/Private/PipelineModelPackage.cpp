@@ -146,11 +146,12 @@ EPipelineModelFormat UPipelineModelPackage::GetModelFormat() const
 		return EPipelineModelFormat::NNE;
 	}
 	const IPipelineFileModel* File = Cast<IPipelineFileModel>(GgufModel.Get());
-	if (File == nullptr || File->GetFileFormat() != EPipelineModelFormat::GGUF)
+	if (File == nullptr)
 	{
 		return EPipelineModelFormat::None;
 	}
-	return EPipelineModelFormat::GGUF;
+	const EPipelineModelFormat FileFormat = File->GetFileFormat();
+	return FileFormat == EPipelineModelFormat::GGUF || FileFormat == EPipelineModelFormat::Phonon ? FileFormat : EPipelineModelFormat::None;
 }
 
 bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutReport) const
@@ -177,10 +178,17 @@ bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutRepor
 
 	const bool bHasNne = Model != nullptr;
 	const bool bHasGguf = GgufModel != nullptr;
+	// GgufModel is the package's "file model" field: a GGUF file or (SpeechToText stage B) a Phonon weights folder.
+	const IPipelineFileModel* FileModel = bHasGguf ? Cast<IPipelineFileModel>(GgufModel.Get()) : nullptr;
+	const EPipelineModelFormat FileFormat = FileModel != nullptr ? FileModel->GetFileFormat() : EPipelineModelFormat::None;
+	const bool bValidFileFormat = FileFormat == EPipelineModelFormat::GGUF || FileFormat == EPipelineModelFormat::Phonon;
+	const bool bPhononSpeech = Task == EPipelineTask::SpeechToText && !bHasNne && bHasGguf && FileFormat == EPipelineModelFormat::Phonon;
 	if (!bHasNne && !bHasGguf)
 	{
 		AddError(EPipelineValidationCode::NoModel, Task == EPipelineTask::TextGeneration
 			? FString(TEXT("GgufModel is empty; assign a GGUF model asset"))
+			: Task == EPipelineTask::SpeechToText
+			? FString(TEXT("Model is empty; assign the imported NNE model data (stage A) or a Phonon weights asset in GgufModel (stage B)"))
 			: FString(TEXT("Model is empty; assign the imported NNE model data")));
 	}
 	else if (bHasNne && bHasGguf)
@@ -195,21 +203,31 @@ bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutRepor
 	{
 		AddError(EPipelineValidationCode::WrongModelFormat, FString::Printf(TEXT("%s needs an NNE model"), LexToString(Task)));
 	}
+	else if (bHasGguf && Task == EPipelineTask::TextGeneration && FileFormat == EPipelineModelFormat::Phonon)
+	{
+		AddError(EPipelineValidationCode::WrongModelFormat, TEXT("TextGeneration needs a GGUF model"));
+	}
+	else if (bHasGguf && Task == EPipelineTask::SpeechToText && FileFormat == EPipelineModelFormat::GGUF)
+	{
+		AddError(EPipelineValidationCode::WrongModelFormat, TEXT("SpeechToText needs the stage-A NNE models or a Phonon weights asset"));
+	}
 
 	if (bHasGguf)
 	{
-		const IPipelineFileModel* File = Cast<IPipelineFileModel>(GgufModel.Get());
-		if (File == nullptr || File->GetFileFormat() != EPipelineModelFormat::GGUF)
+		const IPipelineFileModel* File = FileModel;
+		if (File == nullptr || !bValidFileFormat)
 		{
 			AddError(EPipelineValidationCode::InvalidGgufModel,
-				FString::Printf(TEXT("GgufModel %s is not a GGUF model asset"), *GgufModel->GetName()));
+				FString::Printf(TEXT("GgufModel %s is not a GGUF or Phonon model asset"), *GgufModel->GetName()));
 		}
 		else
 		{
 			TArray<FString> Problems;
 			if (File->GetAbsoluteFilePath().IsEmpty())
 			{
-				Problems.Add(TEXT("its RelativePath is invalid (must start with \"Models/\", end with \".gguf\", no \"..\")"));
+				Problems.Add(FileFormat == EPipelineModelFormat::GGUF
+					? FString(TEXT("its path is invalid (RelativePath must start with \"Models/\", end with \".gguf\", no \"..\")"))
+					: FString(TEXT("its path is invalid (the weights folder cannot be resolved)")));
 			}
 			const int64 Size = File->GetFileSizeBytes();
 			if (Size <= 0)
@@ -235,7 +253,12 @@ bool UPipelineModelPackage::ValidateSettings(FPipelineValidationReport& OutRepor
 			AddError(EPipelineValidationCode::NoDecoderModel,
 				TEXT("DecoderModel is empty; a SpeechToText package needs the decoder_joint model"));
 		}
-		if (TokenizerJson.IsEmpty())
+		if (bPhononSpeech && DecoderModel != nullptr)
+		{
+			AddWarning(EPipelineValidationCode::UnexpectedDecoderModel,
+				TEXT("DecoderModel is set but a Phonon SpeechToText package uses one weights folder"));
+		}
+		if (!bPhononSpeech && TokenizerJson.IsEmpty())
 		{
 			AddError(EPipelineValidationCode::NoTokenizer,
 				FString::Printf(TEXT("TokenizerJson is empty; a %s package needs the tokenizer.json text"), LexToString(Task)));

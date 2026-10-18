@@ -9,6 +9,7 @@
 #include "PipelineSession.h"
 
 class UNNEModelData;
+class ISpeechEngine; // Defined in ModelPipelinesSpeech; Core never includes it (C81a).
 
 /**
  * A model prepared by an IPipelineBackend. Holds no UObject reference.
@@ -48,6 +49,9 @@ public:
 	/** Creates a session for a long-running job (C61). Default: nullptr + Fail(InvalidArgument, "Model has no sessions").
 	    Any thread. Creates no backend state yet (that happens in IPipelineSession::Begin on the worker). */
 	virtual TSharedPtr<IPipelineSession> CreateSession(const FPipelineSessionRequest& Request, FPipelineResult& OutResult);
+
+	/** Any thread. The speech engine behind this model, or nullptr (default). The paid Phonon model returns itself (C81a). */
+	virtual class ISpeechEngine* AsSpeechEngine() { return nullptr; }
 };
 
 /** Creates IPipelineModels from model data. */

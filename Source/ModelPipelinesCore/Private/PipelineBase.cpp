@@ -402,6 +402,11 @@ FPipelineResult UPipelineBase::InitializeFromPackage(UPipelineModelPackage* InPa
 			return InitializeFromPackage(InPackage, Module->GetDefaultBackend());
 		}
 		UE_LOG(LogModelPipelines, Verbose, TEXT("InitializeFromPackage: no backend registered for format %d"), (int32)Format);
+		if (Format == EPipelineModelFormat::Phonon)
+		{
+			return FPipelineResult::Fail(EPipelineError::RuntimeUnavailable,
+				TEXT("no backend for Phonon models; enable the ModelPipelines Generative plugin"));
+		}
 		return FPipelineResult::Fail(EPipelineError::RuntimeUnavailable, FString::Printf(
 			TEXT("no backend is registered for the %s model format (is the plugin that runs it enabled?)"),
 			Format == EPipelineModelFormat::GGUF ? TEXT("GGUF") : TEXT("NNE")));

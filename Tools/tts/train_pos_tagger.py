@@ -10,6 +10,8 @@ Penn Treebank tags. This script distils those tags into an averaged perceptron (
 2. Tokens: our C++ tokenizer (misaki_dump --tokens), so training sees exactly the runtime tokens.
 3. Labels: spaCy en_core_web_sm (MIT) tags those tokens, as misaki would.
 4. Training: 5 passes, seeded shuffle, averaged weights; weights below 0.001 dropped, rounded to 4 places.
+   CAPS_RATE of the sentences are added again in capitals with their original tags, because shouted
+   dialogue ("HELP ME!") is rare in books and the tagger would otherwise read it as proper nouns.
 5. Checks: held-out tag accuracy against spaCy, and parity: the C++ tagger (misaki_dump --tags) must return
    the same tags as this script for every held-out sentence.
 
@@ -36,6 +38,7 @@ TRAIN_BOOKS = ["austen-emma", "austen-persuasion", "austen-sense", "bryant-stori
                "melville-moby_dick"]
 HELDOUT_BOOK = "carroll-alice"
 ITERATIONS = 5
+CAPS_RATE = 0.05
 SEED = 1234
 START, END = ["-START-", "-START2-"], ["-END-", "-END2-"]
 
@@ -260,6 +263,9 @@ def main():
     heldout = labelled(nlp, sentences(books[HELDOUT_BOOK]))
     if args.force or not os.path.exists(out):
         train = labelled(nlp, [s for name in TRAIN_BOOKS for s in sentences(books[name])])
+        caps_rng = random.Random(SEED + 1)
+        train += [([w.upper() for w in words], tags, line) for words, tags, line in train
+                  if caps_rng.random() < CAPS_RATE]
         print(f"train: {len(train)} sentences, {sum(len(w) for w, _, _ in train)} tokens")
         counts = collections.defaultdict(collections.Counter)
         for words, tags, _ in train:

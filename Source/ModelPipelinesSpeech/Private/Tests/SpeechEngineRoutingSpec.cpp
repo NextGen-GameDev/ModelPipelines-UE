@@ -536,6 +536,13 @@ void FSpeechEngineRoutingSpec::Define()
 			// pipeline answers a Transcribe with the C75 not-ready InvalidArgument (same message as a never-initialized pipeline).
 			// (Lead fix 2026-10-18: shared call state + WaitCalls; the not-ready failure is delivered by a game-thread task.)
 			UnregisterFake();
+			if (FModelPipelinesCoreModule::Get().FindBackend(EPipelineModelFormat::Phonon) != nullptr)
+			{
+				// Lead 2026-10-18: the paid plugin's real Phonon backend is registered in this project; the "no backend" path can't be reached.
+				AddInfo(TEXT("SKIPPED: a Phonon backend is registered by another plugin (ModelPipelines Generative)"));
+				Done.Execute();
+				return;
+			}
 			UPipelineModelPackage* P2 = MakeFakePhononPackage();
 			const TStrongObjectPtr<UPipelineModelPackage> KeepPkg(P2);
 			FPipelineResult R;

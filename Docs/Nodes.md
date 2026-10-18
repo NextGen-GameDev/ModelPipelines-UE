@@ -99,6 +99,37 @@ Category **Model Pipelines > Speech**.
 - Outputs: the same as **Transcribe Speech**.
 - The audio is decoded in the background. Procedural sound waves are not supported. A null pipeline or sound, or audio that cannot be decoded, ends in **On Failure**.
 
+#### Start Listening
+
+Category **Model Pipelines > Speech**. Real-time speech: see [Real-time speech](SpeechToText.md#real-time-speech).
+
+- Inputs: **Pipeline** (Speech To Text Pipeline), **Settings** (Speech Stream Settings), **Use Microphone** (default true), **Device Index** (default -1, the default device).
+- Six output pins. Each carries **Transcript** and **Result**.
+
+| Pin | Fires when |
+|---|---|
+| **On Speech Started** | An utterance began. **Transcript** is empty. |
+| **On Partial** | Text so far. Only with an engine that supports partials (the Phonon engine in ModelPipelines Generative). |
+| **On Final** | The final text of an utterance. |
+| **On Speech Ended** | An utterance ended. **Transcript** is empty. |
+| **On Stopped** | The stream stopped. Fires once; nothing follows. **Result** is the stop result. |
+| **On Failure** | Starting failed: no pipeline, pipeline not ready, or no input device. Fires once, on a later tick. **On Stopped** does not follow. |
+
+- For one utterance the order is Started, Partial (zero or more), Ended, Final.
+- Store the returned action. **Get Stream** on it returns the running stream (None before it starts or after a failure).
+
+#### Stop Listening
+
+Category **Model Pipelines > Speech**. Input: the action returned by **Start Listening**. It stops the microphone and the stream. **On Stopped** fires once, then the action is released. A None input logs a warning and does nothing. **Cancel** on the action does the same.
+
+#### Push Speech Audio
+
+Category **Model Pipelines > Speech**. A function on a Speech Stream (get it with **Get Stream**).
+
+- Inputs: **Interleaved** (array of floats), **Sample Rate** (default 16000), **Num Channels** (default 1).
+- Any sample rate from 1000 to 384000 Hz. Bad arguments or non-finite samples drop the chunk and log one warning. After the stream stopped, the call is ignored.
+- Use it when **Use Microphone** is off. **Stop** on the stream finishes the current utterance, then fires **On Stopped**. **Is Running** and **Is Speaking** read its state.
+
 #### World context
 
 Each task node has a hidden **World Context Object** input. In an Actor Blueprint it fills in on its own. In other Blueprints, pass an actor or any world object, or leave it empty.
@@ -236,3 +267,12 @@ The other pipelines:
 Create functions: `UTextPipelineLibrary::CreateTextEmbeddingPipeline`, `CreateTextClassificationPipeline`, `UVisionPipelineLibrary::CreateImageClassificationPipeline`, `CreateObjectDetectionPipeline` (all take `(UPipelineModelPackage*, FPipelineResult&)`).
 
 For images that are not textures (for example from a server with no renderer), build an `FPipelineImage` and call `ClassifyImageAsync` or `DetectImageAsync`.
+
+### C++: real-time speech
+
+Include `SpeechToTextPipeline.h` and `SpeechStream.h`. `USpeechToTextPipeline::StartStream(const FSpeechStreamSettings&, FPipelineResult&)` returns a `USpeechStream*`, or null with the reason in the result. Keep the stream in a `UPROPERTY`. If you drop it, the next garbage collection ends it without more events.
+
+- Events (game thread, dynamic multicast): `OnSpeechStarted`, `OnPartial`, `OnFinal`, `OnSpeechEnded`, `OnStopped`.
+- `PushAudio(TConstArrayView<float> Interleaved, int32 SampleRate, int32 NumChannels)` works from any thread.
+- `Stop()`, `IsRunning()`, `IsSpeaking()`.
+- Microphone: `USpeechMicrophoneSource::GetCaptureDevices()` lists devices. `Start(Stream, DeviceIndex, OutResult)` opens one (-1 = default). `Stop()` closes it and does not stop the stream.

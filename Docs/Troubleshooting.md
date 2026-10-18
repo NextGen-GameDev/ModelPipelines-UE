@@ -88,6 +88,16 @@ A package that is only reached by a path string (for example `/Game/Models/resne
 
 **The import reports the wrong task or missing files.** A speech folder needs `encoder.onnx`, `decoder_joint.onnx`, `tokenizer.json` and `modelpipelines.json`. See [Get and import models](ImportModel.md#speech-to-text-folders).
 
+## Real-time speech
+
+**Start Listening ends in On Failure with "no audio capture device".** The engine found no input device. Check that a microphone is plugged in and enabled in Windows, and that Windows lets desktop apps use it. `USpeechMicrophoneSource::GetCaptureDevices()` shows what the engine finds.
+
+**On Partial never fires.** Partials need the Phonon engine from the paid ModelPipelines Generative plugin. The free ONNX engine gives On Final only. See [Real-time speech](SpeechToText.md#real-time-speech).
+
+**Quiet room: speech is missed, or small sounds start utterances.** Speech means 12 dB over a running noise floor and above -55 dBFS. A very quiet microphone stays under -55 dBFS: raise its level in Windows. If breath or clicks count as speech, raise `SpeechThresholdDb` (up to 40). If real speech is missed, lower it (down to 3).
+
+**Stop Listening freezes the game for up to 1 s.** The microphone was unplugged during capture, and the engine's capture backend waits for the device. With a working device it takes about 10 ms.
+
 ## Still stuck
 
 Open an issue: https://github.com/NextGen-GameDev/ModelPipelines-UE/issues. Include the Output Log and the report text.

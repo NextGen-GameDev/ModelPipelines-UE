@@ -9,7 +9,7 @@ The model is **not** bundled. You download it, convert it to ONNX with the scrip
 - Output is English, with capital letters and punctuation.
 - One pipeline uses about 4 GB of RAM. Create one pipeline and share it.
 - One call takes up to 600 seconds of audio.
-- Microphone and streaming input are not supported yet.
+- Real-time input (microphone or your own audio) is in [Real-time speech](#real-time-speech).
 - The model weights are licensed CC-BY-4.0. If you ship them, you must credit the authors. See [Attribution](#attribution-cc-by-40).
 
 ## Step 1: Get and convert the model
@@ -142,6 +142,68 @@ Speed, measured on a laptop with an RTX 3080 GPU (UE 5.8). Real-time factor is p
 | GPU (DirectML) | 0.053 | about 0.5 s |
 
 The first GPU call takes about 4 s while DirectML warms up. A 497 s clip took 43 s on the CPU (real-time factor about 0.08).
+
+## Real-time speech
+
+Real-time speech listens to a microphone, or to audio you push, and sends text events while people talk. It uses the same speech pipeline as above. It needs no extra model.
+
+### How it works
+
+An energy voice-activity detector cuts the audio into utterances. It works on 20 ms frames. A frame counts as speech when it is 12 dB over a running noise floor and above -55 dBFS. An utterance starts after 60 ms of speech and includes 0.3 s of audio from before that point (pre-roll). It ends after 0.3 s of silence. An utterance is cut at 30 s.
+
+Events arrive on the game thread. For each utterance the order is: Speech Started, Partial (zero or more), Speech Ended, Final. Stopped comes once, at the end.
+
+| Event | Meaning |
+|---|---|
+| Speech Started | An utterance began. |
+| Partial | Text so far. **Only with the Phonon engine** (see "Stage B engine" below). |
+| Speech Ended | The utterance ended. |
+| Final | The full text of the utterance, with word times. |
+| Stopped | The stream ended. Nothing follows. |
+
+Both engines give finals. Only the Phonon engine gives partials.
+
+### Start listening from a Blueprint
+
+1. Create the speech pipeline and store it in a variable (see Step 4 above).
+2. Add the node **Start Listening** (category **Model Pipelines > Speech**). Plug in **Pipeline**. Leave **Use Microphone** ticked and **Device Index** at -1 (the default device).
+3. Wire the output pins you need: **On Speech Started**, **On Partial**, **On Final**, **On Speech Ended**, **On Stopped**, **On Failure**. Each carries **Transcript** and **Result**.
+4. Store the node's return value in a variable.
+5. Play and speak. You should see **On Speech Started**, then **On Final** after you stop. For the delay, see the latency table below.
+6. To stop, call **Stop Listening** with the stored variable. **On Stopped** still fires once.
+
+To feed your own audio (voice chat, game audio), untick **Use Microphone**. Call **Get Stream** on the stored node. Then call **Push Speech Audio** with the float samples, the sample rate and the channel count. Any rate from 1000 to 384000 Hz and any channel count work.
+
+All pins: [Nodes](Nodes.md#start-listening).
+
+### Settings
+
+**Start Listening** takes a **Settings** struct (`FSpeechStreamSettings`). Out-of-range values are clamped.
+
+| Setting | Default | Range | Meaning |
+|---|---|---|---|
+| `EndOfSpeechHangoverSeconds` | 0.3 | 0.1 to 2 | Silence that ends an utterance. |
+| `PartialIntervalSeconds` | 0.5 | 0.1 to 5 | New speech audio between two partials. |
+| `bPartials` | true | | Ask for partials. An engine without partials ignores it. |
+| `SpeechThresholdDb` | 12 | 3 to 40 | Speech level over the noise floor. |
+| `MaxUtteranceSeconds` | 30 | 2 to 120 | Longest utterance. |
+
+### Speed with the ONNX engine (stage A)
+
+Decoding takes about 0.15 to 0.4 s per utterance on a CPU. The final text arrives after the 0.3 s hangover plus the decode time. See the latency table below.
+
+<!-- latency: WP9R.5a -->
+
+### Limits
+
+- English only.
+- Microphone capture uses the engine's AudioCapture backend on Windows. With no input device, **On Failure** fires.
+- A quiet room can make speech detection less reliable. See [Troubleshooting](Troubleshooting.md#real-time-speech).
+- **Stop Listening** can block the game thread for up to 1 s when the device was unplugged during capture. Normally it takes about 10 ms.
+
+### Stage B engine (ModelPipelines Generative)
+
+The paid ModelPipelines Generative plugin adds a second speech engine, Phonon. With it you get partial text, about 0.3 to 0.5 GB of RAM per engine (stage A: about 4 GB) and faster CPU decoding. Your Blueprints stay the same. See `Docs/SpeechStageB.md` in the ModelPipelines Generative plugin.
 
 ## Attribution (CC-BY-4.0)
 

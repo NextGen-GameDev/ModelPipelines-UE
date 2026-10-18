@@ -10,11 +10,14 @@
 - Any sample rate from 1000 to 384000 Hz and any channel count. Up to 600 s per call; audio over 35 s is split at quiet points into 25 to 35 s windows.
 - Sound waves (PCM, ADPCM, Bink, Opus) are decoded off the game thread. Silence gate (`SilenceThresholdDb`, -60 dBFS by default).
 - Docs: `Docs/SpeechToText.md`, and speech sections in the import, node, license and troubleshooting pages.
+- Real-time speech: Blueprint nodes **Start Listening** (pins On Speech Started, On Partial, On Final, On Speech Ended, On Stopped, On Failure), **Stop Listening** and **Push Speech Audio**. C++: `USpeechToTextPipeline::StartStream`, `USpeechStream`, `USpeechMicrophoneSource`.
+- An energy voice-activity detector finds utterances (12 dB over the noise floor, above -55 dBFS, 0.3 s hangover, 30 s cap). Finals work with the ONNX engine. Partials need the Phonon engine of ModelPipelines Generative.
+- Docs: "Real-time speech" in `Docs/SpeechToText.md`, plus node and troubleshooting entries.
 
 ### Known limitations
 
 - English only. About 4 GB of RAM per speech pipeline.
-- No microphone or streaming input. Procedural sound waves are not supported.
+- Procedural sound waves are not supported.
 - The decoder always runs on the CPU.
 
 ## [0.1.0] - 2026-10-06

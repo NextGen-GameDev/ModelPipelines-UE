@@ -44,6 +44,11 @@ struct MODELPIPELINESSPEECH_API FSpeechTranscript
 	/** Encoder + decoder time; 0 when the silence gate answered without inference. */
 	UPROPERTY(BlueprintReadOnly, Category = "Speech")
 	float InferenceMs = 0.f;
+
+	/** Real-time finals only: this final is a corrected version of the previous final of the same stream (speech resumed within
+	    MergeWindowSeconds, so the turn was transcribed again as one piece). Replace the previous final's text with this one. */
+	UPROPERTY(BlueprintReadOnly, Category = "Speech")
+	bool bReplacesPrevious = false;
 };
 
 /**

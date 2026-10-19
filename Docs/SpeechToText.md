@@ -189,6 +189,27 @@ All pins: [Nodes](Nodes.md#start-listening).
 | `bPartials` | true | | Ask for partials. An engine without partials ignores it. |
 | `SpeechThresholdDb` | 12 | 3 to 40 | Speech level over the noise floor. |
 | `MaxUtteranceSeconds` | 30 | 2 to 120 | Longest utterance. |
+| `MergeWindowSeconds` | 1.0 | 0 to 3 | If you continue within this time after an utterance, the whole turn is transcribed again as one piece and a corrected final follows. 0 = off: a final is never a correction. |
+| `MinSpeechSeconds` | 0.1 | 0 to 2 | An utterance with less detected speech than this is never transcribed alone. Right after a sentence (within `MergeWindowSeconds`) it joins that sentence's correction. Right before one, it is included in that sentence's final. Alone (clicks, breaths, a cough) it gives an empty final and no engine call. |
+
+### Pauses and corrected finals
+
+The final text of an utterance arrives about 0.2 s after you stop. A pause inside a sentence can end an utterance early. Then the first part is transcribed alone.
+
+If you continue within `MergeWindowSeconds` (1.0 s), the plugin transcribes the whole turn again as one piece. It sends a second **Final** for the whole sentence. That final has **Replaces Previous** set (`FSpeechTranscript::bReplacesPrevious`). It is true only for real-time finals.
+
+- **Replaces Previous** false: a new line.
+- **Replaces Previous** true: a corrected version of the previous final of the same stream. Replace the previous final's text with this one.
+
+A turn can produce several finals. The first has **Replaces Previous** false. Each later one has it true. The event order for each utterance does not change: Speech Started, Partial (zero or more), Speech Ended, Final.
+
+Before you react to a whole sentence (for example an NPC reply), wait until the turn is over: no **Speech Started** within `MergeWindowSeconds` after the last **Speech Ended**. Then the last **Final** of the turn is its complete text (if speech resumed, wait for the Final that replaces it). A reply sent on the first final may answer half a sentence.
+
+A corrected final arrives after the continued part ends, like any final: about 0.3 s with the Phonon engine and 0.6 to 0.7 s with the ONNX engine after you stop. The joined audio is longer, so the ONNX engine takes a little more. <!-- join latency: WP9R.7h -->
+
+With the Phonon engine the partial text covers the whole turn while you speak.
+
+Short pieces are never transcribed alone: next to a sentence they are joined to it, alone they give an empty final. `MinSpeechSeconds` decides what counts as short. A turn is at most 12 s (or `MaxUtteranceSeconds` if smaller); longer talk starts a new turn.
 
 ### Speed with the ONNX engine (stage A)
 
@@ -205,7 +226,7 @@ Measured on an Intel i7-11800H laptop CPU (8 cores), audio pushed at real-time s
 | Phonon (stage B, ModelPipelines Generative) | 12 short phrases | 0.30 / 0.32 s | not measured | 2.8 % |
 | Phonon (stage B, ModelPipelines Generative) | 45 s of read speech | 0.32 / 0.38 s | 0.16 / 0.52 s | 0.9 % |
 
-A longer `EndOfSpeechHangoverSeconds` adds its difference to every final. A shorter one can split a sentence at a pause.
+A longer `EndOfSpeechHangoverSeconds` adds its difference to every final. A shorter one can split a sentence at a pause; see [Pauses and corrected finals](#pauses-and-corrected-finals).
 
 ### Limits
 

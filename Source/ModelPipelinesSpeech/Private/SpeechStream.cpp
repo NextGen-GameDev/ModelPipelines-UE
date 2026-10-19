@@ -7,6 +7,7 @@
 #include "HAL/CriticalSection.h"
 #include "HAL/PlatformTime.h"
 #include "Math/UnrealMathUtility.h"
+#include "Misc/ScopeExit.h"
 #include "Misc/ScopeLock.h"
 #include "Tasks/Task.h"
 #include "UObject/WeakObjectPtrTemplates.h"
@@ -45,6 +46,7 @@ namespace UE::ModelPipelines::Speech
 		{
 			TArray<float> Audio;
 			TArray<FSpeechVadEvent> Events;
+			int64 SpeechSamplesNow = 0;   // WP9R.7: speech frames (samples) of the VAD's current utterance after this audio
 		};
 
 		enum class EStreamOp : uint8
@@ -53,6 +55,7 @@ namespace UE::ModelPipelines::Speech
 			Feed,
 			Partial,
 			Flush,
+			Reopen, // WP9R.7: discards the engine stream (a join that turned out too long) and opens a fresh one
 			Close   // releases the engine stream on the worker (Finish / destroy)
 		};
 
@@ -150,7 +153,11 @@ namespace UE::ModelPipelines::Speech
 				{
 					return FPipelineResult::Fail(EPipelineError::RuntimeUnavailable, TEXT("the model has no speech engine"));
 				}
-				if (Op == EStreamOp::Open)
+				if (Op == EStreamOp::Reopen)
+				{
+					Holder->Stream.Reset();
+				}
+				if (Op == EStreamOp::Open || Op == EStreamOp::Reopen)
 				{
 					if (!Holder->Stream.IsValid())
 					{
@@ -223,6 +230,8 @@ namespace UE::ModelPipelines::Speech
 			EStreamOp Op = EStreamOp::Feed;
 			TArray<float> Audio;
 			int32 Utterance = -1;
+			int32 Epoch = 0;   // engine-stream generation (WP9R.7: a Reopen starts a new one)
+			bool bLive = true; // C83 am.2 (2): false for re-fed turn audio and fallback audio (not counted by back-pressure)
 		};
 
 		/** One ended utterance waiting for its final. */
@@ -233,6 +242,10 @@ namespace UE::ModelPipelines::Speech
 			double EngineOffsetSeconds = 0.0;   // stream clock minus engine-stream clock (Phonon)
 			double EndDecisionTime = 0.0;
 			bool bReady = false;
+			bool bBroadcastEmpty = false;   // WP9R.7: an utterance below MinSpeechSeconds: its empty final is broadcast
+			bool bReplaces = false;         // WP9R.7: joins the previous real utterance (bReplacesPrevious)
+			int32 TurnId = -1;
+			int32 Epoch = 0;
 			FSpeechTranscript Final;
 		};
 	}
@@ -290,6 +303,31 @@ namespace UE::ModelPipelines::Speech
 		int64 InFlightSamples = 0;   // audio of the op running on the executor (back-pressure, rule 7)
 		TMap<int32, FUtteranceRecord> Utterances;
 		int32 NextFinal = 0;
+		// WP9R.7 join and correct (C83)
+		int64 MergeWindowSamples = 0;
+		int64 MinSpeechSamples = 0;
+		int64 MaxTurnSamples = 0;
+		bool bConfirmed = false;        // the current utterance reached MinSpeechSeconds of speech frames
+		int64 CurFirstSpeech = 0;       // first speech frame of the current utterance (before the pre-roll)
+		bool bTentativeJoin = false;    // Phonon: the current utterance re-fed the turn audio from TurnStart
+		bool bTurnValid = false;
+		int64 TurnStart = 0;            // first sample of the turn (pre-roll included)
+		int64 TurnEnd = 0;              // SpeechEnded sample of the turn's last real utterance
+		int32 TurnCounter = 0;
+		int32 LastTextTurn = -1;        // turn of the last broadcast final with text
+		bool bTurnPending = false;      // C83 am.1: the turn so far holds only utterances below MinSpeechSeconds (no final with text yet)
+		int64 CurSpeechSamples = 0;     // speech frames (samples) of the current utterance so far
+		/** C83 am.1 (4): NNE finals run one Transcribe at a time; a queued final superseded by a later ended utterance of the same turn
+		    is delivered empty without an engine call. */
+		struct FNneFinalReq
+		{
+			int32 Utt = 0;
+			int32 TurnId = -1;
+			TArray<float> Audio;
+		};
+		TArray<FNneFinalReq> NneQueue;
+		bool bNneInFlight = false;
+		int32 Epoch = 0;
 		TSharedRef<FEngineStreamHolder, ESPMode::ThreadSafe> Holder = MakeShared<FEngineStreamHolder, ESPMode::ThreadSafe>();
 
 		int64 HistoryEnd() const { return HistoryStart + History.Num(); }
@@ -365,15 +403,20 @@ namespace UE::ModelPipelines::Speech
 			{
 				return;
 			}
+			// C83 am.2 (2): only LIVE audio not yet handed to the engine counts; re-fed turn audio and fallback audio do not.
 			int64 Pending = InFlightSamples + FMath::Max<int64>(0, Queued16k.load());
 			for (const FQueuedOp& Op : Ops)
 			{
-				Pending += Op.Audio.Num();
+				Pending += Op.bLive ? Op.Audio.Num() : 0;
 			}
 			int64 Excess = Pending - MaxQueuedSamples;
 			for (int32 i = 0; i < Ops.Num() && Excess > 0; ++i)
 			{
 				FQueuedOp& Op = Ops[i];
+				if (!Op.bLive)
+				{
+					continue;
+				}
 				const int32 N = (int32)FMath::Min<int64>(Excess, Op.Audio.Num());
 				if (N <= 0)
 				{
@@ -383,18 +426,22 @@ namespace UE::ModelPipelines::Speech
 				Excess -= N;
 				NoteBackPressureDrop(N);
 				// The engine stream never sees the dropped audio: its clock runs N samples behind the stream clock from here on.
-				FedSamples -= N;
+				// Only the engine stream (epoch) that would have received the audio is affected.
 				const double Shift = (double)N / StreamRate;
 				for (TPair<int32, FUtteranceRecord>& Pair : Utterances)
 				{
-					if (Pair.Key >= Op.Utterance)
+					if (Pair.Key >= Op.Utterance && Pair.Value.Epoch == Op.Epoch)
 					{
 						Pair.Value.EngineOffsetSeconds += Shift;
 					}
 				}
-				if (UtteranceIndex >= Op.Utterance)
+				if (Op.Epoch == Epoch)
 				{
-					EngineOffsetSeconds += Shift;
+					FedSamples -= N;
+					if (UtteranceIndex >= Op.Utterance)
+					{
+						EngineOffsetSeconds += Shift;
+					}
 				}
 			}
 		}
@@ -463,6 +510,7 @@ namespace UE::ModelPipelines::Speech
 					Item.Audio = MoveTemp(Mono);
 				}
 				Vad.Process(Item.Audio, Item.Events);
+				Item.SpeechSamplesNow = Vad.GetSpeechSamples();
 				FScopeLock Lock(&OutLock);
 				Out.Add(MoveTemp(Item));
 			}
@@ -518,6 +566,8 @@ namespace UE::ModelPipelines::Speech
 				// Everything pushed before Stop() is processed: end the current utterance now (rule 6, no hangover wait).
 				if (bSpeaking)
 				{
+					// Stop flushes as before WP9R.7: the cut utterance gets its engine call even below MinSpeechSeconds.
+					Confirm(MinSpeechSamples, HistoryEnd());
 					FeedUpTo(HistoryEnd());
 					EndUtterance(HistoryEnd());
 				}
@@ -558,23 +608,40 @@ namespace UE::ModelPipelines::Speech
 				{
 					if (!bSpeaking)
 					{
-						BeginUtterance(E.SampleIndex);
+						BeginUtterance(E.SampleIndex, E.FirstSpeechSample, E.SpeechSamples);
 					}
 				}
 				else if (bSpeaking)
 				{
+					Confirm(E.SpeechSamples, E.SampleIndex);
 					FeedUpTo(E.SampleIndex);
 					EndUtterance(E.SampleIndex);
+				}
+				if (bFinished || !Owner.IsValid())
+				{
+					return;
 				}
 			}
 			if (bSpeaking)
 			{
+				Confirm(Item.SpeechSamplesNow, HistoryEnd());
 				FeedUpTo(HistoryEnd());
 				MaybeRequestPartial();
 			}
-			// Keep what is still needed (NNE: the current utterance for its Transcribe; Phonon: only the not yet fed audio, since fed
-			// audio is copied into the ops) plus a second of history for the next pre-roll.
-			const int64 Needed = bSpeaking ? (EngineModel.IsValid() ? Cursor : FMath::Min(UtteranceStart, Cursor)) : HistoryEnd();
+			// WP9R.7: a turn that can no longer be joined (no new start can fall inside the window, or any new end would exceed
+			// MaxUtteranceSeconds) releases its audio.
+			if (bTurnValid && ((!bSpeaking && HistoryEnd() - 4 * FSpeechVad::FrameSamples - TurnEnd > MergeWindowSamples)
+				|| HistoryEnd() - FSpeechVad::FrameSamples - TurnStart > MaxTurnSamples))
+			{
+				bTurnValid = false;
+			}
+			// Keep what is still needed (the current utterance from its start: NNE for its Transcribe, Phonon for a fallback re-feed
+			// of a join that grew too long; the turn audio while it can still be joined) plus a second of history for the next pre-roll.
+			int64 Needed = bSpeaking ? FMath::Min(UtteranceStart, Cursor) : HistoryEnd();
+			if (bTurnValid && MergeWindowSamples > 0)
+			{
+				Needed = FMath::Min(Needed, TurnStart);
+			}
 			const int64 Keep = FMath::Min(Needed, HistoryEnd() - IdleHistorySamples);
 			if (Keep > HistoryStart)
 			{
@@ -583,9 +650,16 @@ namespace UE::ModelPipelines::Speech
 			}
 		}
 
-		void BeginUtterance(int64 Start)
+		void BeginUtterance(int64 Start, int64 FirstSpeech, int64 SpeechSamples)
 		{
 			Start = FMath::Clamp(Start, HistoryStart, HistoryEnd());
+			FirstSpeech = FMath::Clamp(FirstSpeech, Start, HistoryEnd());
+			if (MergeWindowSamples > 0 && bTurnValid && FirstSpeech - TurnEnd <= MergeWindowSamples)
+			{
+				// WP9R.7: speech inside the merge window: the joined audio is contiguous, so the pre-roll is not clamped at the previous
+				// end (also when the join fails on MaxUtteranceSeconds and this utterance starts a new turn).
+				Start = FMath::Clamp(FirstSpeech - FSpeechVad::PreRollSamples, HistoryStart, Start);
+			}
 			bSpeaking = true;
 			UtteranceStart = Start;
 			Cursor = Start;
@@ -593,19 +667,74 @@ namespace UE::ModelPipelines::Speech
 			SamplesSincePartial = 0;
 			LastPartialText.Reset();
 			EngineOffsetSeconds = (double)(Start - FedSamples) / StreamRate;
+			bConfirmed = false;
+			bTentativeJoin = false;
+			CurSpeechSamples = 0;
+			CurFirstSpeech = FMath::Max(FirstSpeech, Start);
 			if (EngineModel.IsValid() && !bOpenQueued)
 			{
 				bOpenQueued = true;
-				Ops.Add({ EStreamOp::Open, TArray<float>(), UtteranceIndex });
+				Ops.Add({ EStreamOp::Open, TArray<float>(), UtteranceIndex, Epoch });
 			}
 			if (USpeechStream* S = Owner.Get())
 			{
 				S->OnSpeechStarted.Broadcast();
 			}
+			if (!bFinished && Owner.IsValid() && bSpeaking)
+			{
+				Confirm(SpeechSamples, HistoryEnd());
+			}
 		}
 
-		void FeedUpTo(int64 End)
+		/** WP9R.7: true if an utterance whose first speech frame is FirstSpeech and that ends at End joins the current turn. */
+		bool CanJoin(int64 FirstSpeech, int64 End) const
 		{
+			return MergeWindowSamples > 0 && bTurnValid && TurnStart >= HistoryStart
+				&& FirstSpeech - TurnEnd <= MergeWindowSamples && End - TurnStart <= MaxTurnSamples;
+		}
+
+		/** WP9R.7: the current utterance may reach the engine: it has MinSpeechSeconds of speech frames, or (C83 am.1) it joins an open
+		    turn whatever its length. Phonon: nothing was fed before this point; a joining utterance (or one continuing a pending turn)
+		    re-feeds the engine stream from the turn start (the engine clock restarts there), any other feeds from its start. */
+		void Confirm(int64 SpeechSamples, int64 At)
+		{
+			if (!bSpeaking)
+			{
+				return;
+			}
+			CurSpeechSamples = FMath::Max(CurSpeechSamples, SpeechSamples);
+			if (bConfirmed)
+			{
+				return;
+			}
+			const int64 Now = FMath::Max(At, UtteranceStart);
+			const bool bJoinsOpenTurn = bTurnValid && !bTurnPending && CanJoin(CurFirstSpeech, Now);
+			if (CurSpeechSamples < MinSpeechSamples && !bJoinsOpenTurn)
+			{
+				return;   // a pending-turn start keeps the gate
+			}
+			bConfirmed = true;
+			if (!EngineModel.IsValid())
+			{
+				return;
+			}
+			bTentativeJoin = CanJoin(CurFirstSpeech, Now);
+			const int64 From = bTentativeJoin ? TurnStart : UtteranceStart;
+			Cursor = From;
+			EngineOffsetSeconds = (double)(From - FedSamples) / StreamRate;
+			if (bTentativeJoin)
+			{
+				// C83 am.2 (2): the re-fed turn audio (turn start .. now) goes in its own op that back-pressure does not count.
+				FeedUpTo(Now, false);
+			}
+		}
+
+		void FeedUpTo(int64 End, bool bLive = true)
+		{
+			if (EngineModel.IsValid() && !bConfirmed)
+			{
+				return;   // WP9R.7 (MinSpeechSeconds): nothing reaches the engine before the utterance has enough speech
+			}
 			End = FMath::Min(End, HistoryEnd());
 			if (End <= Cursor)
 			{
@@ -621,13 +750,14 @@ namespace UE::ModelPipelines::Speech
 			SamplesSincePartial += N;
 			FedSamples += N;
 			const float* Data = History.GetData() + (From - HistoryStart);
-			if (Ops.Num() > 0 && Ops.Last().Op == EStreamOp::Feed && Ops.Last().Utterance == UtteranceIndex)
+			if (Ops.Num() > 0 && Ops.Last().Op == EStreamOp::Feed && Ops.Last().Utterance == UtteranceIndex && Ops.Last().Epoch == Epoch
+				&& Ops.Last().bLive == bLive)
 			{
 				Ops.Last().Audio.Append(Data, N);
 			}
 			else
 			{
-				Ops.Add({ EStreamOp::Feed, TArray<float>(Data, N), UtteranceIndex });
+				Ops.Add({ EStreamOp::Feed, TArray<float>(Data, N), UtteranceIndex, Epoch, bLive });
 			}
 		}
 
@@ -640,18 +770,109 @@ namespace UE::ModelPipelines::Speech
 			}
 			SamplesSincePartial = 0;
 			bPartialOutstanding = true;
-			Ops.Add({ EStreamOp::Partial, TArray<float>(), UtteranceIndex });
+			Ops.Add({ EStreamOp::Partial, TArray<float>(), UtteranceIndex, Epoch });
 		}
 
 		void EndUtterance(int64 End)
 		{
 			End = FMath::Clamp(End, UtteranceStart, HistoryEnd());
 			bSpeaking = false;
-			FUtteranceRecord& Rec = Utterances.Add(UtteranceIndex);
+			const int32 Utt = UtteranceIndex;
+			FUtteranceRecord& Rec = Utterances.Add(Utt);
 			Rec.Start = UtteranceStart;
 			Rec.End = End;
-			Rec.EngineOffsetSeconds = EngineOffsetSeconds;
 			Rec.EndDecisionTime = FPlatformTime::Seconds();
+
+			const bool bShort = CurSpeechSamples < MinSpeechSamples;
+			const bool bOpenTurn = bTurnValid && !bTurnPending;
+			bool bJoin = false;
+			bool bFallback = false;
+			if (EngineModel.IsValid())
+			{
+				bJoin = bTentativeJoin && TurnStart >= HistoryStart && End - TurnStart <= MaxTurnSamples;
+				bFallback = bTentativeJoin && !bJoin;
+			}
+			else
+			{
+				bJoin = CanJoin(CurFirstSpeech, End);
+			}
+			bTentativeJoin = false;
+			const bool bJoinOpen = bJoin && bOpenTurn;
+
+			if (bShort && !bJoinOpen)
+			{
+				// C83 am.1 (2): below MinSpeechSeconds and not joining an open turn: an empty final without an engine call. It extends a
+				// pending turn it starts inside the window of, or opens a new pending turn (a real utterance inside the window then starts
+				// its turn here; otherwise it is dropped as noise).
+				if (bTurnValid && bTurnPending && CanJoin(CurFirstSpeech, End))
+				{
+					TurnEnd = End;
+				}
+				else
+				{
+					bTurnValid = MergeWindowSamples > 0;
+					bTurnPending = true;
+					TurnStart = UtteranceStart;
+					TurnEnd = End;
+				}
+				if (EngineModel.IsValid() && bConfirmed)
+				{
+					// Phonon: it was fed for a join that turned out too long: discard what the engine stream got (its queued feeds
+					// are dropped: the Reopen discards them anyway).
+					for (int32 i = Ops.Num() - 1; i >= 0; --i)
+					{
+						if (Ops[i].Op == EStreamOp::Feed && Ops[i].Utterance == Utt && Ops[i].Epoch == Epoch)
+						{
+							Ops.RemoveAt(i);
+						}
+						else if (Ops[i].Op == EStreamOp::Partial)
+						{
+							Ops.RemoveAt(i);
+							bPartialOutstanding = false;
+						}
+					}
+					++Epoch;
+					Ops.Add({ EStreamOp::Reopen, TArray<float>(), Utt, Epoch });
+					FedSamples = 0;
+					Cursor = End;
+				}
+				Rec.bBroadcastEmpty = true;
+				Rec.EngineOffsetSeconds = EngineOffsetSeconds;
+				Rec.Epoch = Epoch;
+				if (USpeechStream* S = Owner.Get())
+				{
+					S->OnSpeechEnded.Broadcast();
+				}
+				if (!bFinished && Owner.IsValid())
+				{
+					CompleteFinal(Utt, FSpeechTranscript());
+				}
+				return;
+			}
+
+			if (bJoinOpen)
+			{
+				Rec.Start = TurnStart;
+				Rec.bReplaces = true;
+				TurnEnd = End;
+			}
+			else if (bJoin)
+			{
+				// C83 am.1 (2): a real utterance continuing a pending turn: a normal first final covering the short utterance(s) too.
+				Rec.Start = TurnStart;
+				bTurnPending = false;
+				TurnEnd = End;
+				++TurnCounter;
+			}
+			else
+			{
+				bTurnValid = true;
+				bTurnPending = false;
+				TurnStart = UtteranceStart;
+				TurnEnd = End;
+				++TurnCounter;
+			}
+			Rec.TurnId = TurnCounter;
 
 			if (EngineModel.IsValid())
 			{
@@ -664,24 +885,54 @@ namespace UE::ModelPipelines::Speech
 						bPartialOutstanding = false;
 					}
 				}
-				if (Ops.Num() > 0 && Ops.Last().Op == EStreamOp::Feed)
+				if (bFallback)
+				{
+					// WP9R.7: the joined turn would exceed MaxUtteranceSeconds: discard what the engine stream got for this turn, open a
+					// fresh stream (its clock starts at 0) and give it this utterance alone (a new turn).
+					for (int32 i = Ops.Num() - 1; i >= 0; --i)
+					{
+						if (Ops[i].Op == EStreamOp::Feed && Ops[i].Utterance == Utt && Ops[i].Epoch == Epoch)
+						{
+							Ops.RemoveAt(i);   // fed to the stream the Reopen discards
+						}
+					}
+					++Epoch;
+					Ops.Add({ EStreamOp::Reopen, TArray<float>(), Utt, Epoch });
+					const int64 From = FMath::Max(UtteranceStart, HistoryStart);
+					TArray<float> Audio;
+					if (End > From)
+					{
+						Audio.Append(History.GetData() + (From - HistoryStart), (int32)(End - From));
+					}
+					EngineOffsetSeconds = (double)From / StreamRate;
+					FedSamples = Audio.Num();
+					Cursor = End;
+					Ops.Add({ EStreamOp::Flush, MoveTemp(Audio), Utt, Epoch, false });   // C83 am.2 (2): not counted by back-pressure
+				}
+				else if (Ops.Num() > 0 && Ops.Last().Op == EStreamOp::Feed && Ops.Last().Epoch == Epoch)
 				{
 					Ops.Last().Op = EStreamOp::Flush;
-					Ops.Last().Utterance = UtteranceIndex;
+					Ops.Last().Utterance = Utt;
 				}
 				else
 				{
-					Ops.Add({ EStreamOp::Flush, TArray<float>(), UtteranceIndex });
+					Ops.Add({ EStreamOp::Flush, TArray<float>(), Utt, Epoch });
 				}
 			}
-			else
+			Rec.EngineOffsetSeconds = EngineOffsetSeconds;
+			Rec.Epoch = Epoch;
+			const int64 FinalStart = Rec.Start;
+			if (!EngineModel.IsValid())
 			{
-				StartNneFinal(UtteranceIndex, Rec.Start, Rec.End);
+				StartNneFinal(Utt, FinalStart, End);
 			}
 
-			if (USpeechStream* S = Owner.Get())
+			if (!bFinished && Owner.IsValid())
 			{
-				S->OnSpeechEnded.Broadcast();
+				if (USpeechStream* S = Owner.Get())
+				{
+					S->OnSpeechEnded.Broadcast();
+				}
 			}
 		}
 
@@ -701,15 +952,78 @@ namespace UE::ModelPipelines::Speech
 				CompleteFinal(Utt, FSpeechTranscript());
 				return;
 			}
+			const FUtteranceRecord* Rec = Utterances.Find(Utt);
+			const int32 TurnId = Rec ? Rec->TurnId : -1;
+			if (TurnId >= 0)
+			{
+				for (FNneFinalReq& Queued : NneQueue)
+				{
+					if (Queued.TurnId == TurnId)
+					{
+						Queued.Audio.Empty();   // C83 am.2 (4): superseded; PumpNne delivers it empty without an engine call
+					}
+				}
+			}
+			FNneFinalReq& Req = NneQueue.AddDefaulted_GetRef();
+			Req.Utt = Utt;
+			Req.TurnId = TurnId;
+			Req.Audio = MoveTemp(Audio);
+			PumpNne();
+		}
+
+		/** Issues the next queued NNE final (one Transcribe at a time). C83 am.1 (4): a final whose turn already has a later ended
+		    utterance queued is delivered empty without an engine call (the later correction covers the turn). */
+		void PumpNne()
+		{
+			while (!bNneInFlight && !bFinished && Owner.IsValid() && NneQueue.Num() > 0)
+			{
+				FNneFinalReq Req = MoveTemp(NneQueue[0]);
+				NneQueue.RemoveAt(0);
+				bool bSuperseded = false;
+				for (const FNneFinalReq& Later : NneQueue)
+				{
+					bSuperseded |= Req.TurnId >= 0 && Later.TurnId == Req.TurnId;
+				}
+				USpeechStream* S = Owner.Get();
+				USpeechToTextPipeline* Pipe = S ? S->Pipeline.Get() : nullptr;
+				if (bSuperseded || !Pipe)
+				{
+					if (FUtteranceRecord* Rec = Utterances.Find(Req.Utt))
+					{
+						Rec->bBroadcastEmpty = bSuperseded;
+						Rec->bReplaces = false;
+					}
+					CompleteFinal(Req.Utt, FSpeechTranscript());
+					continue;
+				}
+				IssueNneTranscribe(Pipe, Req.Utt, MoveTemp(Req.Audio));
+			}
+		}
+
+		void IssueNneTranscribe(USpeechToTextPipeline* Pipe, int32 Utt, TArray<float>&& Audio)
+		{
+			bNneInFlight = true;
 			TWeakPtr<FSpeechStreamImpl, ESPMode::ThreadSafe> Weak = AsShared();
 			const TWeakObjectPtr<USpeechStream> WeakOwner = Owner;
 			Pipe->Transcribe(MoveTemp(Audio), StreamRate, 1, [Weak, WeakOwner, Utt](const FPipelineResult& Result, const FSpeechTranscript& Transcript)
 			{
 				const TSharedPtr<FSpeechStreamImpl, ESPMode::ThreadSafe> Self = Weak.Pin();
-				if (!Self.IsValid() || !WeakOwner.IsValid() || Self->bFinished)
+				if (!Self.IsValid())
 				{
 					return;
 				}
+				Self->bNneInFlight = false;
+				if (!WeakOwner.IsValid() || Self->bFinished)
+				{
+					return;
+				}
+				ON_SCOPE_EXIT
+				{
+					if (!Self->bFinished && WeakOwner.IsValid())
+					{
+						Self->PumpNne();
+					}
+				};
 				if (!Result.bSuccess)
 				{
 					if (Result.Error == EPipelineError::Cancelled)
@@ -759,7 +1073,7 @@ namespace UE::ModelPipelines::Speech
 				}
 			};
 			bOpInFlight = true;
-			InFlightSamples = Session->GetAudioNum();
+			InFlightSamples = Op.bLive ? Session->GetAudioNum() : 0;   // C83 am.2 (2)
 			if (Executor->EnqueueSession(Session, MoveTemp(Callbacks), Owner.Get()) == 0)
 			{
 				bOpInFlight = false;
@@ -797,6 +1111,10 @@ namespace UE::ModelPipelines::Speech
 			{
 				Finish(Result);
 				return;
+			}
+			else if (Kind == EStreamOp::Reopen)
+			{
+				CutFinals.Remove(Utt);   // finals the discarded stream cut for the abandoned join
 			}
 			else if (Kind == EStreamOp::Feed)
 			{
@@ -865,10 +1183,22 @@ namespace UE::ModelPipelines::Speech
 				Utterances.Remove(NextFinal);
 				++NextFinal;
 				const double Ms = (FPlatformTime::Seconds() - Done.EndDecisionTime) * 1000.0;
+				UE_LOG(LogModelPipelinesSpeech, Verbose, TEXT("USpeechStream: final of utterance %d [%.2f..%.2f s] turn %d joined %d below-min-speech %d '%s'"), NextFinal - 1, Done.Start / 16000.0, Done.End / 16000.0,
+					Done.TurnId, (int32)Done.bReplaces, (int32)Done.bBroadcastEmpty, *Done.Final.Text);
 				if (Done.Final.Text.IsEmpty())
 				{
-					UE_LOG(LogModelPipelinesSpeech, Verbose, TEXT("USpeechStream: empty final (not broadcast), speech end -> result %.0f ms"), Ms);
-					continue;
+					if (!Done.bBroadcastEmpty)
+					{
+						UE_LOG(LogModelPipelinesSpeech, Verbose, TEXT("USpeechStream: empty final (not broadcast), speech end -> result %.0f ms"), Ms);
+						continue;
+					}
+					Done.Final.bReplacesPrevious = false;   // WP9R.7: below MinSpeechSeconds (no engine call)
+				}
+				else
+				{
+					// WP9R.7: a correction replaces the previous final only if that final (same turn) was broadcast with text.
+					Done.Final.bReplacesPrevious = Done.bReplaces && Done.TurnId == LastTextTurn;
+					LastTextTurn = Done.TurnId;
 				}
 				UE_LOG(LogModelPipelinesSpeech, Verbose, TEXT("final: speech end → OnFinal %.0f ms (inference %.0f ms)"), Ms, Done.Final.InferenceMs);
 				if (USpeechStream* S = Owner.Get())
@@ -892,6 +1222,7 @@ namespace UE::ModelPipelines::Speech
 			bStopRequested = true;
 			bStopped.store(true);
 			Ops.Reset();
+			NneQueue.Reset();
 			CutFinals.Reset();
 			CloseEngineStream();
 			if (TickerHandle.IsValid())
@@ -944,6 +1275,7 @@ namespace UE::ModelPipelines::Speech
 			bFinished = true;
 			bStopped.store(true);
 			Ops.Reset();
+			NneQueue.Reset();
 			if (!bWasFinished)
 			{
 				CloseEngineStream();
@@ -972,6 +1304,10 @@ void USpeechStream::Start(USpeechToTextPipeline* InPipeline, const FSpeechStream
 	Impl = MakeShared<FSpeechStreamImpl, ESPMode::ThreadSafe>(Vad);
 	Impl->Settings = InSettings;
 	Impl->Owner = this;
+	Impl->MergeWindowSamples = FMath::Max<int64>(0, (int64)FMath::RoundToDouble((double)InSettings.MergeWindowSeconds * 16000.0));
+	Impl->MinSpeechSamples = FMath::Max<int64>(0, (int64)FMath::RoundToDouble((double)InSettings.MinSpeechSeconds * 16000.0));
+	// C83 am.1 (3): a turn's audio is at most min(MaxUtteranceSeconds, 12 s).
+	Impl->MaxTurnSamples = FMath::Max<int64>(FSpeechVad::FrameSamples, (int64)FMath::RoundToDouble(FMath::Min((double)InSettings.MaxUtteranceSeconds, 12.0) * 16000.0));
 	Impl->EngineModel = InEngineModel;
 	if (InSettings.bPartials)
 	{

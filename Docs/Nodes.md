@@ -110,13 +110,21 @@ Category **Model Pipelines > Speech**. Real-time speech: see [Real-time speech](
 |---|---|
 | **On Speech Started** | An utterance began. **Transcript** is empty. |
 | **On Partial** | Text so far. Only with an engine that supports partials (the Phonon engine in ModelPipelines Generative). |
-| **On Final** | The final text of an utterance. |
+| **On Final** | The final text of an utterance. **Transcript** carries **Replaces Previous** (`bReplacesPrevious`). True means this is a corrected version of the previous final: replace the previous line. See [Pauses and corrected finals](SpeechToText.md#pauses-and-corrected-finals). |
 | **On Speech Ended** | An utterance ended. **Transcript** is empty. |
 | **On Stopped** | The stream stopped. Fires once; nothing follows. **Result** is the stop result. |
 | **On Failure** | Starting failed: no pipeline, pipeline not ready, or no input device. Fires once, on a later tick. **On Stopped** does not follow. |
 
 - For one utterance the order is Started, Partial (zero or more), Ended, Final.
 - Store the returned action. **Get Stream** on it returns the running stream (None before it starts or after a failure).
+
+Recipe: replace the last line on a corrected final. Keep a `Lines` array of strings.
+
+1. From **On Final**, drag **Transcript** and add **Break Speech Transcript** (or read the **Replaces Previous** field).
+2. Add a **Branch** with **Replaces Previous** as its Condition.
+3. True: **Set Array Elem** on `Lines`, Index = **Last Index** of `Lines`, Item = **Text**. If `Lines` is empty, tick **Size to Fit** or use step 4.
+4. False: **Add** the **Text** to `Lines`.
+5. Show `Lines` in your Text widget. A corrected sentence now updates its line in place.
 
 #### Stop Listening
 

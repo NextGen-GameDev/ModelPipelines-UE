@@ -323,8 +323,18 @@ void AModelPipelinesTalkToTextSample::HandleFinal(const FSpeechTranscript& Trans
 	}
 
 	LastLatency = EndedTime >= 0.0 ? static_cast<float>(Now - EndedTime + FMath::Clamp(StreamSettings.EndOfSpeechHangoverSeconds, 0.1f, 2.f)) /* StartStream clamps the same way */ : -1.f;
-	Lines.Add(Text);
-	LineLatencies.Add(LastLatency);
+	if (Transcript.bReplacesPrevious && Lines.Num() > 0)
+	{
+		// WP9R.7 (C83): a corrected final of the same turn replaces the last line and its latency.
+		Lines.Last() = Text;
+		LineLatencies.SetNum(Lines.Num());
+		LineLatencies.Last() = LastLatency;
+	}
+	else
+	{
+		Lines.Add(Text);
+		LineLatencies.Add(LastLatency);
+	}
 	const int32 Cap = FMath::Max(1, MaxLines);
 	if (Lines.Num() > Cap)
 	{

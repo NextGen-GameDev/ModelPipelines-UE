@@ -14,6 +14,7 @@
 - An energy voice-activity detector finds utterances (12 dB over the noise floor, above -55 dBFS, 0.2 s hangover, 30 s cap). Finals work with the ONNX engine. Partials need the Phonon engine of ModelPipelines Generative.
 - Docs: "Real-time speech" in `Docs/SpeechToText.md`, plus node and troubleshooting entries.
 - Sample map `L_TalkToText` (actor `ModelPipelinesTalkToTextSample`): press Play, talk, see the final text with the delay of each line. Needs the `phonon-2-fp16w` package in `/Game/Models`. Docs: `Docs/Samples.md`. The map script `Tools/samples/build_sample_maps.py` gains `--only <map>` to rebuild single maps.
+- Real-time speech: join and correct. The first text of a sentence arrives 0.2 s after you stop. If you continue within `MergeWindowSeconds` (1.0 s), a corrected final for the whole sentence follows with `FSpeechTranscript::bReplacesPrevious` (Blueprint: **Replaces Previous**) set. Replace the previous line, and wait for the corrected final before reacting to a whole sentence. New settings: `MergeWindowSeconds` (0 to 3, 0 = off) and `MinSpeechSeconds` (default 0.25, 0 to 2): shorter noises give an empty final with no engine call. `L_TalkToText` replaces its last line on a corrected final.
 
 ### Known limitations
 

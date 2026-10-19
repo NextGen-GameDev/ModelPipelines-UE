@@ -26,6 +26,10 @@ namespace UE::ModelPipelines::Speech
 	{
 		ESpeechVadEventType Type = ESpeechVadEventType::Started;
 		int64 SampleIndex = 0;
+		/** WP9R.7: Started: start of the first speech frame (before the pre-roll). Ended: same value as the matching Started. */
+		int64 FirstSpeechSample = 0;
+		/** WP9R.7: Ended: speech frames of the utterance, in samples (Started: the StartFrames that triggered it). */
+		int64 SpeechSamples = 0;
 	};
 
 	/**
@@ -49,6 +53,8 @@ namespace UE::ModelPipelines::Speech
 		void Process(TConstArrayView<float> Mono16k, TArray<FSpeechVadEvent>& OutEvents);
 
 		bool IsSpeaking() const { return bSpeaking; }
+		/** Speech frames (in samples) of the current utterance so far; 0 when not speaking. */
+		int64 GetSpeechSamples() const { return bSpeaking ? SpeechFrames * FrameSamples : 0; }
 		float GetNoiseFloorDb() const;
 
 		static constexpr int32 FrameSamples = 320;
@@ -77,5 +83,7 @@ namespace UE::ModelPipelines::Speech
 		int64 LastSpeechEnd = 0;
 		int32 SilentFrames = 0;
 		int64 LastEnded = 0;
+		int64 SpeechFrames = 0;
+		int64 FirstSpeechSample = 0;
 	};
 }

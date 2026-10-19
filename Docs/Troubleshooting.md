@@ -96,6 +96,10 @@ A package that is only reached by a path string (for example `/Game/Models/resne
 
 **Quiet room: speech is missed, or small sounds start utterances.** Speech means 12 dB over a running noise floor and above -55 dBFS. A very quiet microphone stays under -55 dBFS: raise its level in Windows. If breath or clicks count as speech, raise `SpeechThresholdDb` (up to 40). If real speech is missed, lower it (down to 3).
 
+**My sentence is split, or words are missing after a pause.** A pause longer than `EndOfSpeechHangoverSeconds` (0.2 s) ends an utterance. If you continue within `MergeWindowSeconds` (1.0 s), a corrected final for the whole sentence follows with **Replaces Previous** set: replace the previous line with it. If your code reacts to the first final only, you see half a sentence. Wait for the corrected one. If you pause longer than 1.0 s, raise `MergeWindowSeconds` (up to 3) or `EndOfSpeechHangoverSeconds` (up to 2). The second adds its difference to every final. See [Pauses and corrected finals](SpeechToText.md#pauses-and-corrected-finals).
+
+**A cough or click produced text.** Raise `MinSpeechSeconds` (default 0.1, up to 2; a lone "yes" has about 0.2 to 0.3 s of speech, so stay below that if players answer with one word). A short piece with no speech within `MergeWindowSeconds` before or after it gives an empty final and no engine call.
+
 **Stop Listening freezes the game for up to 1 s.** The microphone was unplugged during capture, and the engine's capture backend waits for the device. With a working device it takes about 10 ms.
 
 ## Still stuck

@@ -994,8 +994,14 @@ void FSpeechStreamSpec::Define()
 				TestEqual(TEXT("OnStopped once"), Recv->Count(ESpeechStreamTestEvent::Stopped), 1);
 				TestTrue(TEXT("every event on the game thread"), Recv->AllOnGameThread());
 				TestTrue(*FString::Printf(TEXT("at least 2 finals for 45 s of speech (got %d)"), Fi.Num()), Fi.Num() >= 2);
-				FString Joined;
-				for (const FSpeechStreamTestRecord& F : Fi) { Joined += F.Transcript.Text + TEXT(" "); }
+				// Lead, C83: apply corrections (a bReplacesPrevious final replaces the previous line; empty finals carry no text).
+				TArray<FString> Lines;
+				for (const FSpeechStreamTestRecord& F : Fi)
+				{
+					if (F.Transcript.Text.TrimStartAndEnd().IsEmpty()) { continue; }
+					if (F.Transcript.bReplacesPrevious && Lines.Num() > 0) { Lines.Last() = F.Transcript.Text; } else { Lines.Add(F.Transcript.Text); }
+				}
+				const FString Joined = FString::Join(Lines, TEXT(" "));
 				TArray<FString> Got, Gold;
 				Words(Joined, Got);
 				for (const FSttLongWord& W : Rec->Words) { Words(W.Word, Gold); }

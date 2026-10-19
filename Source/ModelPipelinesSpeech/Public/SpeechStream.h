@@ -46,6 +46,16 @@ struct MODELPIPELINESSPEECH_API FSpeechStreamSettings
 	/** Longest utterance; a longer one is ended there, seconds (2..120). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
 	float MaxUtteranceSeconds = 30.f;
+
+	/** Speech that starts within this time after an utterance ended joins that utterance: the joined audio is transcribed again and
+	    the final replaces the previous one (bReplacesPrevious). 0 = off. Seconds, 0..3. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	float MergeWindowSeconds = 1.0f;
+
+	/** Utterances with less detected speech than this are never transcribed alone: next to a sentence (within MergeWindowSeconds)
+	    they join it; alone (clicks) they give an empty final without an engine call. Seconds of speech frames, 0..2. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Speech")
+	float MinSpeechSeconds = 0.1f;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FSpeechStreamEvent);

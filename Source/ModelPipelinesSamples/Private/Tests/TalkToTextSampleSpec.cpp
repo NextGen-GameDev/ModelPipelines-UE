@@ -550,7 +550,7 @@ void FTalkToTextSampleSpec::Define()
 		{
 			// Stage A (no partials): finals only. Catches a sample that never appends, appends twice, reports a result without a
 			// final (or the other way round), shows partial text on an engine without partials, or garbles the transcript.
-			BeginListening(this, Run, Done, [](AModelPipelinesTalkToTextSample* S) { S->bUseMicrophone = false; },
+			BeginListening(this, Run, Done, [](AModelPipelinesTalkToTextSample* S) { S->bUseMicrophone = false; S->StreamSettings.MergeWindowSeconds = 0.f; /* lead: pre-C83 line-count case; joins are tested in TalkToText.Join */ },
 				[this, Done](TSharedRef<FRun> R, AModelPipelinesTalkToTextSample* S)
 				{
 					TestNotNull(TEXT("GetStream non-null while listening"), S->GetStream());
@@ -600,7 +600,7 @@ void FTalkToTextSampleSpec::Define()
 		LatentIt("MaxLinesTwoKeepsTheLastTwoFinalsOldestFirst", LatentLimit, [this](const FDoneDelegate& Done)
 		{
 			// Catches dropping the newest instead of the oldest, an off-by-one in the cap, or newest-first order.
-			BeginListening(this, Run, Done, [](AModelPipelinesTalkToTextSample* S) { S->bUseMicrophone = false; S->MaxLines = 2; },
+			BeginListening(this, Run, Done, [](AModelPipelinesTalkToTextSample* S) { S->bUseMicrophone = false; S->StreamSettings.MergeWindowSeconds = 0.f; /* lead: pre-C83 line-count case; joins are tested in TalkToText.Join */ S->MaxLines = 2; },
 				[this, Done](TSharedRef<FRun> R, AModelPipelinesTalkToTextSample* S)
 				{
 					R->StartPush(PushedSecondsFull);

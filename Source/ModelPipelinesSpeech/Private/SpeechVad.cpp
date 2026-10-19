@@ -77,7 +77,9 @@ namespace UE::ModelPipelines::Speech
 			UtteranceStart = FMath::Max3<int64>(RunStartFrame * FrameSamples - PreRollSamples, 0, LastEnded);
 			LastSpeechEnd = FrameEnd;
 			SilentFrames = 0;
-			OutEvents.Add({ ESpeechVadEventType::Started, UtteranceStart });
+			SpeechFrames = StartFrames;
+			FirstSpeechSample = RunStartFrame * FrameSamples;
+			OutEvents.Add({ ESpeechVadEventType::Started, UtteranceStart, FirstSpeechSample, SpeechFrames * FrameSamples });
 			return;
 		}
 
@@ -85,6 +87,7 @@ namespace UE::ModelPipelines::Speech
 		{
 			LastSpeechEnd = FrameEnd;
 			SilentFrames = 0;
+			++SpeechFrames;
 		}
 		else
 		{
@@ -96,7 +99,7 @@ namespace UE::ModelPipelines::Speech
 			bSpeaking = false;
 			Consecutive = 0;
 			LastEnded = FrameEnd;
-			OutEvents.Add({ ESpeechVadEventType::Ended, FrameEnd });
+			OutEvents.Add({ ESpeechVadEventType::Ended, FrameEnd, FirstSpeechSample, SpeechFrames * FrameSamples });
 		}
 	}
 }

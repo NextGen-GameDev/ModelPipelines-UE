@@ -1048,6 +1048,10 @@ USpeechStream* USpeechToTextPipeline::StartStream(const FSpeechStreamSettings& S
 	Clamped.PartialIntervalSeconds = FMath::Clamp(Clamped.PartialIntervalSeconds, 0.1f, 5.f);
 	Clamped.SpeechThresholdDb = FMath::Clamp(Clamped.SpeechThresholdDb, 3.f, 40.f);
 	Clamped.MaxUtteranceSeconds = FMath::Clamp(Clamped.MaxUtteranceSeconds, 2.f, 120.f);
+	if (!FMath::IsFinite(Clamped.MergeWindowSeconds)) { Clamped.MergeWindowSeconds = Defaults.MergeWindowSeconds; }
+	if (!FMath::IsFinite(Clamped.MinSpeechSeconds)) { Clamped.MinSpeechSeconds = Defaults.MinSpeechSeconds; }
+	Clamped.MergeWindowSeconds = FMath::Clamp(Clamped.MergeWindowSeconds, 0.f, 3.f);
+	Clamped.MinSpeechSeconds = FMath::Clamp(Clamped.MinSpeechSeconds, 0.f, 2.f);
 
 	USpeechStream* Stream = NewObject<USpeechStream>(GetTransientPackage());
 	Stream->Start(this, Clamped, EngineModel);

@@ -205,7 +205,16 @@ A turn can produce several finals. The first has **Replaces Previous** false. Ea
 
 Before you react to a whole sentence (for example an NPC reply), wait until the turn is over: no **Speech Started** within `MergeWindowSeconds` after the last **Speech Ended**. Then the last **Final** of the turn is its complete text (if speech resumed, wait for the Final that replaces it). A reply sent on the first final may answer half a sentence.
 
-A corrected final arrives after the continued part ends, like any final: about 0.3 s with the Phonon engine and 0.6 to 0.7 s with the ONNX engine after you stop. The joined audio is longer, so the ONNX engine takes a little more. <!-- join latency: WP9R.7h -->
+A corrected final arrives after the continued part ends, like any final: about 0.3 s with the Phonon engine and 0.6 to 0.7 s with the ONNX engine after you stop. The joined audio is longer, so the ONNX engine takes a little more. Measured with pauses inside sentences (Intel i7-11800H laptop CPU, real-time speed, default settings). The time is from the end of speech to the final:
+
+| Engine | Audio | First final p50 | Corrected final p50 / p90 | WER real time / whole clip |
+|---|---|---|---|---|
+| ONNX (stage A) | 67 s of meeting speech | 0.38 s | 0.68 / 1.27 s | 6.4 % / 4.6 % |
+| ONNX (stage A) | 54 s of read speech with 15 pauses | 0.47 s | 1.29 / 1.82 s | 4.5 % / 4.5 % |
+| Phonon (stage B) | 67 s of meeting speech | 0.27 s | 0.35 / 0.47 s | 6.4 % / 8.2 % |
+| Phonon (stage B) | 54 s of read speech with 15 pauses | 0.30 s | 0.43 / 0.47 s | 4.5 % / 3.6 % |
+
+A corrected final re-transcribes the whole turn (up to 12 s), so with the ONNX engine it takes longer for long sentences.
 
 With the Phonon engine the partial text covers the whole turn while you speak.
 

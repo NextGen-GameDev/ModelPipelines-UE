@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "UObject/ObjectPtr.h"
+#include "SpeechMicrophoneSource.h"
 #include "SpeechStream.h"
 #include "SpeechTypes.h"
 #include "ModelPipelinesSampleBase.h"
@@ -11,6 +12,7 @@
 
 class SButton;
 class SVerticalBox;
+template <typename OptionType> class SComboBox;
 class USpeechMicrophoneSource;
 class USpeechToTextPipeline;
 
@@ -81,6 +83,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Model Pipelines|Sample")
 	USpeechStream* GetStream() const;
 
+	/** The input devices (USpeechMicrophoneSource::GetCaptureDevices, queried now; empty when none). */
+	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Sample")
+	TArray<FSpeechCaptureDevice> GetMicrophones() const;
+
+	/** Use input device InDeviceIndex (-1 = default device) and turn bUseMicrophone on. While listening, only the capture restarts on the
+	    same stream (no transcript is lost); a failure shows "No microphone (<message>)..." and keeps the stream. Not listening: just stored. */
+	UFUNCTION(BlueprintCallable, Category = "Model Pipelines|Sample")
+	void SetMicrophone(int32 InDeviceIndex);
+
+	/** Name of the device being captured ("" when the microphone is not active). */
+	UFUNCTION(BlueprintPure, Category = "Model Pipelines|Sample")
+	FString GetMicrophoneName() const;
+
 	/** Fires on the game thread for every non-empty final transcript. */
 	UPROPERTY(BlueprintAssignable, Category = "Model Pipelines|Sample")
 	FSpeechStreamTranscriptEvent OnFinalText;
@@ -114,7 +129,13 @@ private:
 	/** Unbinds this actor from Stream and drops the reference. */
 	void ReleaseStream();
 	void StopMicrophone();
+	/** Starts Microphone (created when null) on Stream with DeviceIndex; sets MicrophoneName or MicrophoneFailure. */
+	void StartMicrophone();
 	void ToggleListening();
+	/** Re-queries the devices into MicOptions (overlay combo). */
+	void RefreshMicOptions();
+	/** The combo text for DeviceIndex. */
+	FString GetMicComboText() const;
 
 	UPROPERTY(Transient)
 	TObjectPtr<USpeechToTextPipeline> Pipeline;
@@ -147,4 +168,7 @@ private:
 
 	TSharedPtr<SButton> ToggleButton;
 	TSharedPtr<SVerticalBox> LinesList;
+	/** Combo entries: DeviceIndex -1 = the default device, -2 = the disabled "No microphone found" entry; Name holds the shown text. */
+	TArray<TSharedPtr<FSpeechCaptureDevice>> MicOptions;
+	TSharedPtr<SComboBox<TSharedPtr<FSpeechCaptureDevice>>> MicCombo;
 };

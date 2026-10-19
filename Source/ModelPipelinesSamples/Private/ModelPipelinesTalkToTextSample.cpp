@@ -6,6 +6,7 @@
 #include "Styling/CoreStyle.h"
 #include "UObject/WeakObjectPtrTemplates.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 #include "SpeechMicrophoneSource.h"
@@ -73,30 +74,7 @@ void AModelPipelinesTalkToTextSample::StartListening()
 
 	if (bUseMicrophone)
 	{
-		if (!Microphone)
-		{
-			Microphone = NewObject<USpeechMicrophoneSource>(this);
-		}
-		FPipelineResult MicResult;
-		if (Microphone->Start(Stream, DeviceIndex, MicResult))
-		{
-			const TArray<FSpeechCaptureDevice> Devices = USpeechMicrophoneSource::GetCaptureDevices();
-			if (DeviceIndex < 0)
-			{
-				const FSpeechCaptureDevice* Default = Devices.FindByPredicate([](const FSpeechCaptureDevice& D) { return D.bIsDefault; });
-				MicrophoneName = Default ? Default->Name : FString(TEXT("default microphone"));
-			}
-			else
-			{
-				MicrophoneName = Devices.IsValidIndex(DeviceIndex) ? Devices[DeviceIndex].Name : FString::Printf(TEXT("device %d"), DeviceIndex);
-			}
-		}
-		else
-		{
-			// The stream stays: audio pushed from Blueprint is still transcribed.
-			UE_LOG(LogModelPipelinesSamples, Warning, TEXT("%s: microphone not started: %s"), *GetName(), *MicResult.Message);
-			MicrophoneFailure = FString::Printf(TEXT("No microphone (%s). Audio pushed with Get Stream > Push Speech Audio is still transcribed."), *MicResult.Message);
-		}
+		StartMicrophone();
 	}
 
 	SetInputHint(GetListeningStatus());
@@ -165,6 +143,38 @@ USpeechStream* AModelPipelinesTalkToTextSample::GetStream() const
 	return Stream;
 }
 
+TArray<FSpeechCaptureDevice> AModelPipelinesTalkToTextSample::GetMicrophones() const
+{
+	return USpeechMicrophoneSource::GetCaptureDevices();
+}
+
+void AModelPipelinesTalkToTextSample::SetMicrophone(int32 InDeviceIndex)
+{
+	DeviceIndex = InDeviceIndex;
+	bUseMicrophone = true;
+	if (!IsPlaying() || !bListening || !Stream)
+	{
+		// Applied by the next StartListening.
+		return;
+	}
+
+	// Only the capture restarts: the stream, its delegates, the lines and the partial text stay.
+	// Stop waits for the capture thread's last callback (~10 ms; up to 1 s on an unplugged device, engine behaviour).
+	StopMicrophone();
+	Microphone = NewObject<USpeechMicrophoneSource>(this);
+	StartMicrophone();
+
+	const bool bQuiet = !MicrophoneFailure.IsEmpty();
+	SetInputHint(!bQuiet && Stream->IsSpeaking() ? FString(TEXT("Hearing speech..."))
+		: !bQuiet && SpeechEndedTimes.Num() > 0 ? FString(TEXT("Transcribing...")) : GetListeningStatus());
+	RefreshOverlay();
+}
+
+FString AModelPipelinesTalkToTextSample::GetMicrophoneName() const
+{
+	return IsMicrophoneActive() ? MicrophoneName : FString();
+}
+
 // ---------------------------------------------------------------------------------------------------- play / pipeline
 
 void AModelPipelinesTalkToTextSample::EndPlay(const EEndPlayReason::Type Reason)
@@ -182,6 +192,8 @@ void AModelPipelinesTalkToTextSample::EndPlay(const EEndPlayReason::Type Reason)
 	}
 	ToggleButton.Reset();
 	LinesList.Reset();
+	MicCombo.Reset();
+	MicOptions.Reset();
 	Super::EndPlay(Reason);
 }
 
@@ -427,6 +439,82 @@ void AModelPipelinesTalkToTextSample::StopMicrophone()
 	}
 }
 
+void AModelPipelinesTalkToTextSample::StartMicrophone()
+{
+	MicrophoneName.Reset();
+	MicrophoneFailure.Reset();
+	if (!Stream)
+	{
+		return;
+	}
+	if (!Microphone)
+	{
+		Microphone = NewObject<USpeechMicrophoneSource>(this);
+	}
+	FPipelineResult MicResult;
+	if (Microphone->Start(Stream, DeviceIndex, MicResult))
+	{
+		const TArray<FSpeechCaptureDevice> Devices = USpeechMicrophoneSource::GetCaptureDevices();
+		if (DeviceIndex < 0)
+		{
+			const FSpeechCaptureDevice* Default = Devices.FindByPredicate([](const FSpeechCaptureDevice& D) { return D.bIsDefault; });
+			MicrophoneName = Default ? Default->Name : FString(TEXT("default microphone"));
+		}
+		else
+		{
+			const FSpeechCaptureDevice* Found = Devices.FindByPredicate([this](const FSpeechCaptureDevice& D) { return D.DeviceIndex == DeviceIndex; });
+			MicrophoneName = Found ? Found->Name
+				: Devices.IsValidIndex(DeviceIndex) ? Devices[DeviceIndex].Name : FString::Printf(TEXT("device %d"), DeviceIndex);
+		}
+	}
+	else
+	{
+		// The stream stays: audio pushed from Blueprint is still transcribed.
+		UE_LOG(LogModelPipelinesSamples, Warning, TEXT("%s: microphone not started: %s"), *GetName(), *MicResult.Message);
+		MicrophoneFailure = FString::Printf(TEXT("No microphone (%s). Audio pushed with Get Stream > Push Speech Audio is still transcribed."), *MicResult.Message);
+	}
+}
+
+void AModelPipelinesTalkToTextSample::RefreshMicOptions()
+{
+	const TArray<FSpeechCaptureDevice> Devices = USpeechMicrophoneSource::GetCaptureDevices();
+	MicOptions.Reset();
+	if (Devices.Num() == 0)
+	{
+		TSharedPtr<FSpeechCaptureDevice> None = MakeShared<FSpeechCaptureDevice>();
+		None->DeviceIndex = -2;
+		None->Name = TEXT("No microphone found");
+		MicOptions.Add(None);
+		return;
+	}
+	const FSpeechCaptureDevice* Default = Devices.FindByPredicate([](const FSpeechCaptureDevice& D) { return D.bIsDefault; });
+	TSharedPtr<FSpeechCaptureDevice> DefaultEntry = MakeShared<FSpeechCaptureDevice>();
+	DefaultEntry->DeviceIndex = -1;
+	DefaultEntry->Name = Default ? FString::Printf(TEXT("Default device (%s)"), *Default->Name) : FString(TEXT("Default device"));
+	MicOptions.Add(DefaultEntry);
+	for (const FSpeechCaptureDevice& D : Devices)
+	{
+		MicOptions.Add(MakeShared<FSpeechCaptureDevice>(D));
+	}
+}
+
+FString AModelPipelinesTalkToTextSample::GetMicComboText() const
+{
+	if (MicOptions.Num() == 0 || (MicOptions.Num() == 1 && MicOptions[0].IsValid() && MicOptions[0]->DeviceIndex == -2))
+	{
+		return TEXT("No microphone found");
+	}
+	const int32 Wanted = DeviceIndex;   // only -1 is the default entry; other values fall through to "Device %d (not found)"
+	for (const TSharedPtr<FSpeechCaptureDevice>& Option : MicOptions)
+	{
+		if (Option.IsValid() && Option->DeviceIndex == Wanted)
+		{
+			return Option->Name;
+		}
+	}
+	return FString::Printf(TEXT("Device %d (not found)"), DeviceIndex);
+}
+
 void AModelPipelinesTalkToTextSample::ToggleListening()
 {
 	if (bListening)
@@ -508,11 +596,75 @@ TSharedRef<SWidget> AModelPipelinesTalkToTextSample::BuildOverlay()
 			.Font(SampleFont(18.f, true))
 		];
 
+	RefreshMicOptions();
+	using FMicItem = TSharedPtr<FSpeechCaptureDevice>;
+	SAssignNew(MicCombo, SComboBox<FMicItem>)
+		.OptionsSource(&MicOptions)
+		.IsFocusable(false)   // the base focuses the button; the combo must not take it
+		.OnComboBoxOpening_Lambda([WeakThis]()
+		{
+			// Devices plugged in during play appear.
+			if (AModelPipelinesTalkToTextSample* Self = WeakThis.Get())
+			{
+				Self->RefreshMicOptions();
+				if (Self->MicCombo.IsValid())
+				{
+					Self->MicCombo->RefreshOptions();
+				}
+			}
+		})
+		.OnGenerateWidget_Lambda([](FMicItem Item) -> TSharedRef<SWidget>
+		{
+			const bool bSelectable = Item.IsValid() && Item->DeviceIndex >= -1;
+			return SNew(STextBlock)
+				.Text(FText::FromString(Item.IsValid() ? Item->Name : FString()))
+				.Font(SampleFont(16.f, false))
+				.IsEnabled(bSelectable);
+		})
+		.OnSelectionChanged_Lambda([WeakThis](FMicItem Item, ESelectInfo::Type SelectInfo)
+		{
+			if (SelectInfo == ESelectInfo::Direct || !Item.IsValid() || Item->DeviceIndex < -1)
+			{
+				return;
+			}
+			if (AModelPipelinesTalkToTextSample* Self = WeakThis.Get())
+			{
+				// Re-picking the device in use is a no-op (options are rebuilt on open, so the combo always reports a change); after a
+				// failure the same entry still retries.
+				if (Item->DeviceIndex == Self->DeviceIndex && Self->IsMicrophoneActive())
+				{
+					return;
+				}
+				Self->SetMicrophone(Item->DeviceIndex);
+			}
+		})
+		[
+			SNew(STextBlock)
+			.Text_Lambda([WeakThis]()
+			{
+				const AModelPipelinesTalkToTextSample* Self = WeakThis.Get();
+				return Self ? FText::FromString(Self->GetMicComboText()) : FText::GetEmpty();
+			})
+			.Font(SampleFont(16.f, false))
+		];
+
 	TSharedRef<SWidget> Panel = MakeOverlayPanel(
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
 		[
 			MakeTextLine(EngineLine, FLinearColor(0.75f, 0.75f, 0.75f), 16.f)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				MakeTextLine(FText::FromString(TEXT("Microphone:")), FLinearColor(0.75f, 0.75f, 0.75f), 16.f)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				MicCombo.ToSharedRef()
+			]
 		]
 		+ SVerticalBox::Slot().AutoHeight()
 		[

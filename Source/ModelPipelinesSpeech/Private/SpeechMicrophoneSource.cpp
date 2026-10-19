@@ -95,8 +95,15 @@ bool USpeechMicrophoneSource::Start(USpeechStream* Stream, int32 DeviceIndex, FP
 			FString::Printf(TEXT("USpeechMicrophoneSource::Start: device index %d is out of range (%d device(s))"), DeviceIndex, Infos.Num()));
 		return false;
 	}
+	// An explicit index takes its info from the capture-device list: UE 5.7's FAudioCaptureWasapiStream::GetCaptureDeviceInfo resolves an
+	// explicit index over ALL endpoints (eAll; 5.8 uses eCapture, AudioCaptureWasapi.cpp:22), while OpenAudioCaptureStream and
+	// GetCaptureDevicesAvailable use the capture subset in both versions. Only the default device is queried by GetCaptureDeviceInfo.
 	Audio::FCaptureDeviceInfo Info;
-	if (!NewCapture->GetCaptureDeviceInfo(Info, DeviceIndex))
+	if (DeviceIndex != Audio::DefaultDeviceIndex)
+	{
+		Info = Infos[DeviceIndex];
+	}
+	else if (!NewCapture->GetCaptureDeviceInfo(Info, DeviceIndex))
 	{
 		OutResult = NoDevice(DeviceIndex == Audio::DefaultDeviceIndex ? TEXT("no default input device") : TEXT("the device could not be queried"));
 		return false;

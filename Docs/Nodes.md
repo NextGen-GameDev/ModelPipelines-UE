@@ -103,7 +103,7 @@ Category **Model Pipelines > Speech**.
 
 Category **Model Pipelines > Speech**. Real-time speech: see [Real-time speech](SpeechToText.md#real-time-speech).
 
-- Inputs: **Pipeline** (Speech To Text Pipeline), **Settings** (Speech Stream Settings), **Use Microphone** (default true), **Device Index** (default -1, the default device).
+- Inputs: **Pipeline** (Speech To Text Pipeline), **Settings** (Speech Stream Settings), **Use Microphone** (default true), **Device Index** (default -1, the default device). To let the player choose a microphone, fill a combo box from **Get Capture Devices** (each entry has **Name**, **Device Index**, **Is Default**) and pass the chosen **Device Index**. To switch while listening without losing text, the `L_TalkToText` sample stops its microphone source and starts a new one on the same stream (see [Samples](Samples.md#l_talktotext)).
 - Six output pins. Each carries **Transcript** and **Result**.
 
 | Pin | Fires when |

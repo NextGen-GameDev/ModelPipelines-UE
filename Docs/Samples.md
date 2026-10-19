@@ -170,6 +170,7 @@ Then play the map:
 3. Speak into your microphone.
 4. You should see a panel titled **Talk to Text** with:
    - An engine line. With the free ONNX engine it reads `Engine: ONNX (final text only; partial text needs ModelPipelines Generative)`. With the Phonon engine it reads `Engine: Phonon (partial text while you speak)`.
+   - A **Microphone** drop-down: **Default device (<name>)** and each input device by name. Pick one to switch; the transcription keeps running, so nothing you said is lost. The list is read again each time you open it, so a microphone you plug in during play shows up.
    - A status line: first `Warming up the model...` for a few seconds (one short test transcription, so your first sentence is not slow), then `Listening (<microphone name>)`, then `Hearing speech...` while you talk, then `Transcribing...` until the text arrives.
    - The last 8 final lines. Each has its delay, for example `[0.31 s]`. The delay is the time from the end of your speech to the final text.
    - The partial text in grey while you speak. Only the Phonon engine gives it.
@@ -192,12 +193,12 @@ Actor: `ModelPipelinesTalkToTextSample`. Its **Package** defaults to `/Game/Mode
 | Property | Default | What it does |
 |---|---|---|
 | **bUseMicrophone** | on | Listen to the microphone. Turn it off to push your own audio. |
-| **DeviceIndex** | -1 | The input device. -1 is the default device. |
+| **DeviceIndex** | -1 | The input device. -1 is the default device. Use **Set Microphone** to change it while listening. |
 | **bAutoStart** | on | Start listening when the pipeline is ready. |
 | **StreamSettings** | defaults | The real-time settings. See [Speech to text, Settings](SpeechToText.md#settings). |
 | **MaxLines** | 8 | How many final lines the panel keeps. |
 
-Blueprint-callable on the actor: **Start Listening**, **Stop Listening**, **Is Listening**, **Is Microphone Active**, **Has Partial Text**, **Get Final Lines**, **Get Partial Text**, **Get Last Final Latency Seconds**, **Get Stream**. The event **On Final Text** fires for every final, including corrected ones.
+Blueprint-callable on the actor: **Get Microphones**, **Set Microphone** (Device Index, -1 = default device; switches while listening), **Get Microphone Name**, **Start Listening**, **Stop Listening**, **Is Listening**, **Is Microphone Active**, **Has Partial Text**, **Get Final Lines**, **Get Partial Text**, **Get Last Final Latency Seconds**, **Get Stream**. The event **On Final Text** fires for every final, including corrected ones.
 
 Blueprint version of the core flow:
 

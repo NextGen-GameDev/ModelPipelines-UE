@@ -4,6 +4,8 @@
 // Uses the fake Phonon engine (SpeechFakeEngine.h) and synthetic tone bursts. Files are written on a background task, so every wait
 // is a ticker poll with a timeout (the game thread never blocks). Text comparisons are CASE-SENSITIVE (FString == ignores case).
 
+#include "CoreMinimal.h"   // lead: defines UE_BUILD_SHIPPING / WITH_DEV_AUTOMATION_TESTS before the #if (C4668 in BuildPlugin)
+
 #if WITH_DEV_AUTOMATION_TESTS && !UE_BUILD_SHIPPING
 
 #include "Misc/AutomationTest.h"

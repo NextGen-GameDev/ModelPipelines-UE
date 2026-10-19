@@ -15,7 +15,7 @@ public class ModelPipelinesSpeech : ModuleRules
 		// plugin (ModelPipelines.uplugin depends on it).
 		PrivateDependencyModuleNames.Add("AudioCaptureCore");
 
-		// Automation tests only: read goldens (Json) and build model packages (NNE). Not needed in Shipping.
+		// Automation tests (goldens: Json; model packages: NNE) and the dev session recording (C85, Json). Not needed in Shipping.
 		if (Target.Configuration != UnrealTargetConfiguration.Shipping)
 		{
 			PrivateDependencyModuleNames.AddRange(new string[] { "Json", "NNE" });

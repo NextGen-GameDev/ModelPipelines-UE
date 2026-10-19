@@ -19,10 +19,18 @@
 #include "SpeechEngine.h"
 #include "SpeechToTextPipeline.h"
 #include "SpeechVad.h"
+#include "SpeechStreamRecorder.h"
 
 #include <atomic>
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SpeechStream)
+
+// C85: developer recording (mp.Speech.RecordStreams). Compiled out of Shipping; off -> one pointer check.
+#if !UE_BUILD_SHIPPING
+#define MP_SPEECH_RECORD(Call) do { if (Recorder.IsValid()) { Recorder->Call; } } while (0)
+#else
+#define MP_SPEECH_RECORD(Call) do { } while (0)
+#endif
 
 namespace UE::ModelPipelines::Speech
 {
@@ -329,6 +337,18 @@ namespace UE::ModelPipelines::Speech
 		bool bNneInFlight = false;
 		int32 Epoch = 0;
 		TSharedRef<FEngineStreamHolder, ESPMode::ThreadSafe> Holder = MakeShared<FEngineStreamHolder, ESPMode::ThreadSafe>();
+#if !UE_BUILD_SHIPPING
+		TUniquePtr<FSpeechStreamRecorder> Recorder;   // C85: set at Start while mp.Speech.RecordStreams is 1 (game thread)
+
+		void FinishRecording()
+		{
+			if (Recorder.IsValid())
+			{
+				Recorder->Finish();
+				Recorder.Reset();
+			}
+		}
+#endif
 
 		int64 HistoryEnd() const { return HistoryStart + History.Num(); }
 
@@ -601,6 +621,7 @@ namespace UE::ModelPipelines::Speech
 
 		void ProcessItem(FFrontEndItem& Item)
 		{
+			MP_SPEECH_RECORD(AppendAudio(Item.Audio));
 			History.Append(MoveTemp(Item.Audio));
 			for (const FSpeechVadEvent& E : Item.Events)
 			{
@@ -678,6 +699,7 @@ namespace UE::ModelPipelines::Speech
 			}
 			if (USpeechStream* S = Owner.Get())
 			{
+				MP_SPEECH_RECORD(AddStarted());
 				S->OnSpeechStarted.Broadcast();
 			}
 			if (!bFinished && Owner.IsValid() && bSpeaking)
@@ -841,6 +863,7 @@ namespace UE::ModelPipelines::Speech
 				Rec.Epoch = Epoch;
 				if (USpeechStream* S = Owner.Get())
 				{
+					MP_SPEECH_RECORD(AddEnded());
 					S->OnSpeechEnded.Broadcast();
 				}
 				if (!bFinished && Owner.IsValid())
@@ -931,6 +954,7 @@ namespace UE::ModelPipelines::Speech
 			{
 				if (USpeechStream* S = Owner.Get())
 				{
+					MP_SPEECH_RECORD(AddEnded());
 					S->OnSpeechEnded.Broadcast();
 				}
 			}
@@ -1103,6 +1127,7 @@ namespace UE::ModelPipelines::Speech
 					OffsetWords(T, EngineOffsetSeconds);
 					if (USpeechStream* S = Owner.Get())
 					{
+						MP_SPEECH_RECORD(AddPartial(T.Text));
 						S->OnPartial.Broadcast(T);
 					}
 				}
@@ -1203,6 +1228,7 @@ namespace UE::ModelPipelines::Speech
 				UE_LOG(LogModelPipelinesSpeech, Verbose, TEXT("final: speech end → OnFinal %.0f ms (inference %.0f ms)"), Ms, Done.Final.InferenceMs);
 				if (USpeechStream* S = Owner.Get())
 				{
+					MP_SPEECH_RECORD(AddFinal(Done.Final.Text, Done.Final.bReplacesPrevious, Done.Final.InferenceMs));
 					S->OnFinal.Broadcast(Done.Final);
 				}
 				if (bFinished || !Owner.IsValid())
@@ -1234,6 +1260,10 @@ namespace UE::ModelPipelines::Speech
 			{
 				UE_LOG(LogModelPipelinesSpeech, Log, TEXT("USpeechStream stopped: %s"), *Result.Message);
 			}
+			MP_SPEECH_RECORD(AddStopped(Result.bSuccess, Result.Message));
+#if !UE_BUILD_SHIPPING
+			FinishRecording();
+#endif
 			if (USpeechStream* S = Owner.Get())
 			{
 				S->OnStopped.Broadcast(Result);
@@ -1280,6 +1310,9 @@ namespace UE::ModelPipelines::Speech
 			{
 				CloseEngineStream();
 			}
+#if !UE_BUILD_SHIPPING
+			FinishRecording();
+#endif
 			if (TickerHandle.IsValid())
 			{
 				FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
@@ -1321,6 +1354,12 @@ void USpeechStream::Start(USpeechToTextPipeline* InPipeline, const FSpeechStream
 			UE_LOG(LogModelPipelinesSpeech, Log, TEXT("USpeechStream: partial transcripts need the Phonon engine (ModelPipelines Generative); this stream delivers finals only"));
 		}
 	}
+#if !UE_BUILD_SHIPPING
+	{
+		const UPipelineModelPackage* Package = InPipeline ? InPipeline->GetPackage() : nullptr;
+		Impl->Recorder = FSpeechStreamRecorder::CreateIfEnabled(InEngineModel.IsValid(), Package ? Package->GetPathName() : FString(), InSettings, Impl->bPartialsEnabled);
+	}
+#endif
 	Impl->TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateSP(Impl.ToSharedRef(), &FSpeechStreamImpl::Tick), 0.f);
 }
 

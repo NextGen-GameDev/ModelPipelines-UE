@@ -175,7 +175,7 @@ Then play the map:
    - The partial text in grey while you speak. Only the Phonon engine gives it.
    - A **Stop listening** button. Click it to stop. It then reads **Start listening**. The mouse cursor is on.
 
-Measured delay (end of speech to final text, Intel i7-11800H laptop CPU): about 0.5 to 0.6 s with the ONNX engine, about 0.3 s with the Phonon engine. The full table is in [Speech to text, Latency](SpeechToText.md#latency).
+Measured delay (end of speech to final text, Intel i7-11800H laptop CPU): about 0.5 to 0.7 s with the ONNX engine, about 0.3 s with the Phonon engine. The full table is in [Speech to text, Latency](SpeechToText.md#latency).
 
 No microphone: the status says `No microphone (...)`. Audio you push with **Get Stream** then **Push Speech Audio** is still transcribed.
 

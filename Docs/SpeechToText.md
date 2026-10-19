@@ -200,9 +200,9 @@ Measured on an Intel i7-11800H laptop CPU (8 cores), audio pushed at real-time s
 
 | Engine | Audio | Final text p50 / p90 | Partial lag p50 / p90 | WER |
 |---|---|---|---|---|
-| ONNX (stage A, free) | 12 short phrases, 2.4 to 3.9 s each | 0.60 / 0.65 s | no partials | 1.8 % |
+| ONNX (stage A, free) | 12 short phrases, 2.4 to 4.0 s each | 0.67 / 0.78 s | no partials | 2.8 % |
 | ONNX (stage A, free) | 45 s of read speech, 8 utterances | 0.53 / 0.82 s | no partials | 0.9 % |
-| Phonon (stage B, ModelPipelines Generative) | 12 short phrases | 0.28 / 0.28 s | not measured | 1.8 % |
+| Phonon (stage B, ModelPipelines Generative) | 12 short phrases | 0.30 / 0.32 s | not measured | 2.8 % |
 | Phonon (stage B, ModelPipelines Generative) | 45 s of read speech | 0.32 / 0.38 s | 0.16 / 0.52 s | 0.9 % |
 
 A longer `EndOfSpeechHangoverSeconds` adds its difference to every final. A shorter one can split a sentence at a pause.

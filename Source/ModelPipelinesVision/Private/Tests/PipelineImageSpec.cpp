@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 // WP4.5 visible tests (docs/contracts.md C27 pixel semantics, C30 goldens, C33 tolerances): FPipelineImage, the Pillow-exact
 // ResizeImage and the PreprocessImage chain. Expected values for the data-driven tests come from the golden files at run time.
 

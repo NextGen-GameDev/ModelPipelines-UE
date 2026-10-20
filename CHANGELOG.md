@@ -13,7 +13,7 @@ First public release (beta).
 - Helpers for results: cosine similarity and top-K similarity, top-K labels, box overlap and non-maximum suppression.
 - Non-blocking image input: textures and render targets are read back without stalling the game thread.
 - Four sample maps: `L_SemanticSearch`, `L_Sentiment`, `L_SceneClassifier` and `L_Detection`, with six sample photos.
-- Scripts to download and convert the four sample models (`Tools/`).
+- Scripts to download and convert the four sample models (`Tools/`; on GitHub only, not in the Fab package).
 - User documentation in `Docs/`: install, import a model, samples, nodes, troubleshooting, model licenses.
 - Optional AI agent tools (MCP) in the editor, UE 5.8 only: list, import, validate, benchmark and try models. Importing asks for confirmation first. See `Docs/MCP.md`.
 - Automation tests under `Pipelines.*`.

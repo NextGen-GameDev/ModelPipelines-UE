@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 // WP4.3 (docs/contracts.md C26): FPipelineStages::Prerequisite gates the Preprocess stage.
 
 #if WITH_DEV_AUTOMATION_TESTS

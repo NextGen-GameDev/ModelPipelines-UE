@@ -1,4 +1,4 @@
-# Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+# Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 """Registers the Model Pipelines MCP toolset at editor start-up when the Toolset Registry is available (UE 5.8).
 
 Without it (UE 5.7/5.6, or the ToolsetRegistry / ModelPipelinesMCP modules not loaded) this logs one line and does nothing.

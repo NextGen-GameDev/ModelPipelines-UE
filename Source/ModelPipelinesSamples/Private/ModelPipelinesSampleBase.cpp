@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 
 #include "ModelPipelinesSampleBase.h"
 
@@ -118,7 +118,7 @@ void AModelPipelinesSampleBase::ReportMissingPackage()
 {
 	PendingCall.Reset();
 	const FString Path = Package.IsNull() ? FString(TEXT("(none)")) : Package.ToSoftObjectPath().ToString();
-	const FString Text = FString::Printf(TEXT("Model package not found: %s. Run Plugins/ModelPipelines/Tools/fetch_reference_models.py --only %s, import the folder into /Game/Models, then press Play again. See Docs/Samples.md."),
+	const FString Text = FString::Printf(TEXT("Model package not found: %s. Run Tools/fetch_reference_models.py --only %s (see Docs/ImportModel.md), import the folder into /Game/Models, then press Play again. See Docs/Samples.md."),
 		*Path, *GetModelSlug());
 	UE_LOG(LogModelPipelinesSamples, Warning, TEXT("%s: %s"), *GetName(), *Text);
 	SetState(EPipelineSampleState::MissingPackage, Text);

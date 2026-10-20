@@ -8,6 +8,11 @@ You need Python 3.11 or newer. Python 3.11 is tested, and 3.13 also worked in ou
 
 This virtual environment is only for the download script. The editor runs import scripts (see the batch import section below) with its own Python (UE 5.8 ships 3.11.8), so do not `pip install` anything into the engine.
 
+The download script is in the plugin's `Tools` folder. Below, `<Tools>` stands for that folder:
+
+- If you installed the plugin from GitHub, it is `Plugins/ModelPipelines/Tools` in your project.
+- The Fab package does not include `Tools`. Download **Source code (zip)** of the matching release from https://github.com/NextGen-GameDev/ModelPipelines-UE/releases (0.1.0: tag `v0.1.0`), unzip it anywhere, and use the `Tools` folder inside it.
+
 1. Open a terminal in your project folder (the one with the `.uproject` file).
 2. Create and activate a virtual environment:
 
@@ -19,13 +24,13 @@ This virtual environment is only for the download script. The editor runs import
 3. Install the packages. The first comment line in `requirements.txt` gives the CPU-only torch index URL, which keeps the download small:
 
    ```
-   pip install -r Plugins/ModelPipelines/Tools/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+   pip install -r <Tools>/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
    ```
 
 4. Download and convert the models. Replace `<some folder>` with any folder on your disk, for example `C:\PipelineModels`:
 
    ```
-   python Plugins/ModelPipelines/Tools/fetch_reference_models.py --out <some folder>
+   python <Tools>/fetch_reference_models.py --out <some folder>
    ```
 
    The script prints each model's license as it goes. When it ends, `<some folder>` holds four folders:

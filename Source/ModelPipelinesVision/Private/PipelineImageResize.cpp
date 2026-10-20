@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 //
 // Bit-exact port of Pillow 12's 8-bit Image.resize (libImaging/Resample.c for the convolution filters, the affine
 // nearest path of libImaging/Geometry.c ImagingScaleAffine for NEAREST). docs/contracts.md C27.

@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 // WP4.8a visible tests (docs/contracts.md C29 "Detection postprocess" rules 1-4, C30 tiny_models goldens, C26 NMS):
 // DecodeDetections, the pure DETR-family decode. Golden expectations come from the JSON at run time; hand examples use
 // numbers worked out on paper in the comments.

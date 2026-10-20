@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 // WP4.4b (docs/contracts.md C32): resample filter, LeViT shortest-edge rule, crop-without-size warning.
 
 #if WITH_DEV_AUTOMATION_TESTS

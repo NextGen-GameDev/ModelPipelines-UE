@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 // WP4.8b visible tests (docs/contracts.md C29, C31, C33): UObjectDetectionPipeline and UVisionPipelineLibrary's detection creator.
 // Names: Pipelines.Vision.Detection.*  (not .Decode; parity: .Parity.CPU / .Parity.GPU; texture cases: .RHI.*).
 // No test blocks the game thread on an async result: waits are FTSTicker polls inside LatentIt, with a timeout and a message.

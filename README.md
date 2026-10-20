@@ -27,4 +27,4 @@ Start at [Docs/README.md](Docs/README.md).
 ## License
 
 Apache License 2.0, see [LICENSE](LICENSE). Contributions need the contributor agreement in
-[CLA.md](CLA.md), see [CONTRIBUTING.md](CONTRIBUTING.md).
+[CLA.md](https://github.com/NextGen-GameDev/ModelPipelines-UE/blob/main/CLA.md), see [CONTRIBUTING.md](https://github.com/NextGen-GameDev/ModelPipelines-UE/blob/main/CONTRIBUTING.md).

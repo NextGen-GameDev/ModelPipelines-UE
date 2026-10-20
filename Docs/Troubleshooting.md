@@ -4,7 +4,7 @@
 
 The map cannot find its package. Fix:
 
-1. Run `python Plugins/ModelPipelines/Tools/fetch_reference_models.py --only <slug> --out <folder>` (see [Get and import models](ImportModel.md)).
+1. Run `python <Tools>/fetch_reference_models.py --only <slug> --out <folder>` (see [Get and import models](ImportModel.md)).
 2. Import the folder into the `Content/Models` folder, keeping the folder name.
 3. Press Play again.
 

@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 // WP5.2 visible tests (docs/contracts.md C34, vision part): UClassifyImageAsyncAction and UDetectObjectsAsyncAction.
 // Names: Pipelines.Vision.AsyncAction.*
 //  - headless (run under -nullrhi and with an RHI): PassThrough, Failure, Cancel, Lifetime, Reflection. They compare the node with the

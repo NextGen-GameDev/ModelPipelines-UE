@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 
 // Smoke test for the script-built sample maps (WP5.6 / contract C37). Loads the editor-saved maps headless without opening
 // them in a viewport and checks their contents and the Samples content assets.

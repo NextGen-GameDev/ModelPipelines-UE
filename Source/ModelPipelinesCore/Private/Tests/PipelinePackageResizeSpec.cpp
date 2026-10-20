@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 // WP4.0 (docs/contracts.md C25): InvalidResize rule for StretchCenterCrop.
 
 #if WITH_DEV_AUTOMATION_TESTS

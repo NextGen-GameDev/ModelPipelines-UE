@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 //
 // WP5.5 visible tests (docs/briefs/WP5.5.md, contract C35 vision part): AModelPipelinesSceneClassifierSample and
 // AModelPipelinesDetectionSample. Names: Pipelines.Samples.Vision.*
@@ -67,7 +67,7 @@ namespace VisionSamplesSpecPrivate
 	/** The one place where the brief fixes the exact wording (rule 1 of C35). */
 	static FString MissingText(const FString& Path, const FString& Slug)
 	{
-		return FString::Printf(TEXT("Model package not found: %s. Run Plugins/ModelPipelines/Tools/fetch_reference_models.py --only %s, import the folder into /Game/Models, then press Play again. See Docs/Samples.md."), *Path, *Slug);
+		return FString::Printf(TEXT("Model package not found: %s. Run Tools/fetch_reference_models.py --only %s (see Docs/ImportModel.md), import the folder into /Game/Models, then press Play again. See Docs/Samples.md."), *Path, *Slug);
 	}
 
 	static TSharedPtr<FJsonObject> GCachedRoot;

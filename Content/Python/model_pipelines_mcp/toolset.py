@@ -1,4 +1,4 @@
-# Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+# Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 """Model Pipelines toolset: thin Python layer over unreal.PipelineMcpLibrary (contracts C38/C39).
 
 Imported only by init_unreal.py after it checked that unreal.ToolsetDefinition, unreal.PipelineMcpLibrary and the

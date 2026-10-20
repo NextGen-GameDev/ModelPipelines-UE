@@ -1,4 +1,4 @@
-﻿// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+﻿// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 //
 // Pipelines.MCP.Toolset.* (WP6.3, contract C39/C40): drives the Python toolset
 // model_pipelines_mcp.toolset.ModelPipelinesTools through unreal.ToolsetRegistry.execute_tool, with no module dependency on

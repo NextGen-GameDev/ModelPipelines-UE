@@ -28,7 +28,7 @@ Each map has a PlayerStart, a sun, a sky light and one sample actor. The vision 
 
 If the package is missing, the map shows this text on screen:
 
-> Model package not found: `<path>`. Run Plugins/ModelPipelines/Tools/fetch_reference_models.py --only `<slug>`, import the folder into /Game/Models, then press Play again. See Docs/Samples.md.
+> Model package not found: `<path>`. Run Tools/fetch_reference_models.py --only `<slug>` (see Docs/ImportModel.md), import the folder into /Game/Models, then press Play again. See Docs/Samples.md.
 
 Do what it says, then press Play again.
 

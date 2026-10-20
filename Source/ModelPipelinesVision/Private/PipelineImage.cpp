@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 //
 // FPipelineImage and the CPU preprocessing chain (docs/contracts.md C27): resize per the package's resize mode, centre crop,
 // rescale, normalize, CHW float32. Pure functions, any thread.

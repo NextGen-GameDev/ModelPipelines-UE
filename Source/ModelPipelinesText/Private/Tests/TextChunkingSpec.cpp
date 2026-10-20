@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 
 // WP7.11 / contract C43: calls with more than 16 texts run as sequential chunks of 16. Everything the caller can see must be
 // unchanged: results in input order equal to the goldens, callback exactly once on the game thread and never inside the call,

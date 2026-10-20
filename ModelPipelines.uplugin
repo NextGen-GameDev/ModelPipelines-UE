@@ -5,7 +5,7 @@
 	"FriendlyName": "Model Pipelines",
 	"Description": "Run Hugging Face ONNX models as task pipelines (text embeddings, text classification, image classification, object detection) on Unreal's Neural Network Engine.",
 	"Category": "AI",
-	"CreatedBy": "NextGen-GameDev",
+	"CreatedBy": "Holdout Labs, LLC",
 	"CreatedByURL": "https://github.com/NextGen-GameDev/ModelPipelines-UE",
 	"DocsURL": "https://github.com/NextGen-GameDev/ModelPipelines-UE",
 	"MarketplaceURL": "",

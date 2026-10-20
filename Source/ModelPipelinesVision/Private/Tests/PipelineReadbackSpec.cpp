@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 // WP4.6 visible tests (docs/contracts.md C28): ReadTexturePixelsAsync. Headless cases are Pipelines.Vision.Readback.*, the
 // cases that need a real RHI are Pipelines.Vision.Readback.RHI.* (skipped under -nullrhi unless MODELPIPELINES_REQUIRE_RHI=1).
 // The readback needs game-thread ticks to progress, so no test ever blocks the game thread: every wait is a latent step

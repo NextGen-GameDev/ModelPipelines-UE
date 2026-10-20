@@ -1,4 +1,4 @@
-// Copyright NextGen-GameDev. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Holdout Labs, LLC. Licensed under the Apache License, Version 2.0.
 //
 // M5 performance capture (PLAN section 7: "Unreal Insights capture of the sample maps; report game-thread and inference ms
 // per task"). Names: Pipelines.Samples.Perf.*

@@ -1,6 +1,6 @@
 # Fab listing: Model Pipelines
 
-Ready to paste (2026-10-10). Price: free. Field names follow the usual code-plugin form; check limits in the Fab publisher portal.
+Ready to paste (2026-10-10; Tools/ note 2026-10-20 after the Fab review). Price: free. Field names follow the usual code-plugin form; check limits in the Fab publisher portal.
 
 ## Title (max 60 characters)
 
@@ -55,7 +55,7 @@ Each map needs one model package, which you import yourself (see below).
 
 ### Models are not included
 
-The plugin ships no model. You bring the models, and each model has its own license. The plugin has scripts (`Tools/`) that download and convert four tested models from Hugging Face. All four are Apache-2.0:
+The plugin ships no model. You bring the models, and each model has its own license. A Python script, free on GitHub (https://github.com/NextGen-GameDev/ModelPipelines-UE, folder `Tools/`), downloads and converts four tested models from Hugging Face. All four are Apache-2.0:
 
 | Task | Model | License |
 |---|---|---|
@@ -97,7 +97,7 @@ Code Plugins (pick the closest subcategory in the portal). The `.uplugin` catego
 - The plugin (source code, Win64): Core, Tokenizer, Text, Vision, Samples, Editor and MCP modules.
 - Four sample maps and six sample photos (CC0 or public domain).
 - User documentation in `Docs/`: install, import a model, samples, nodes, troubleshooting, model licenses.
-- Scripts to download and convert the four sample models (`Tools/`).
+- Not included in the Fab package: the scripts that download and convert the sample models. They are free on GitHub (folder `Tools/`); `Docs/ImportModel.md` explains how to get them.
 - `THIRD_PARTY_NOTICES.md` and `CHANGELOG.md`.
 - Not included: any model file.
 
@@ -106,7 +106,7 @@ Code Plugins (pick the closest subcategory in the portal). The `.uplugin` catego
 - Windows 64-bit.
 - Unreal Engine 5.7 or 5.8.
 - The engine plugin NNERuntimeORT (ships with the engine).
-- To get the sample models: Python 3.11 or newer, the packages in `Tools/requirements.txt`, and network access, once (about 1 GB, about 6 minutes). See `Docs/ImportModel.md`.
+- To get the sample models: the `Tools/` folder from GitHub, Python 3.11 or newer, the packages in `Tools/requirements.txt`, and network access, once (about 1 GB, about 6 minutes). See `Docs/ImportModel.md`.
 - No extra build step: the prebuilt tokenizer library is included.
 - For the MCP tools: UE 5.8 and an MCP client such as Claude Code or Cursor.
 
@@ -126,7 +126,7 @@ Issues: https://github.com/NextGen-GameDev/ModelPipelines-UE/issues
 
 ## License notes
 
-- The plugin code is under the Apache License 2.0 (`LICENSE`). Contributions need the contributor agreement in `CLA.md`.
+- The plugin code is under the Apache License 2.0 (`LICENSE`). Contributions need the contributor agreement in `CLA.md` on GitHub.
 - Third-party components and their licenses (tokenizers-cpp, Hugging Face tokenizers, ONNX Runtime, the sample models and photos) are in `THIRD_PARTY_NOTICES.md`.
 - Models carry their own licenses. See `Docs/ModelLicenses.md`.
 - Free. The code stays under Apache-2.0; `LICENSE` ships in the package.

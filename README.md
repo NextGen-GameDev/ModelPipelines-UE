@@ -26,5 +26,5 @@ Start at [Docs/README.md](Docs/README.md).
 
 ## License
 
-Apache License 2.0, see [LICENSE](LICENSE). Contributions need the contributor agreement in
+From GitHub: Apache License 2.0, see [LICENSE](LICENSE). From Fab: the Fab license applies, and the package has no separate license file. Third-party licenses are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Contributions need the contributor agreement in
 [CLA.md](https://github.com/NextGen-GameDev/ModelPipelines-UE/blob/main/CLA.md), see [CONTRIBUTING.md](https://github.com/NextGen-GameDev/ModelPipelines-UE/blob/main/CONTRIBUTING.md).

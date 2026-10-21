@@ -25,4 +25,4 @@ You do not need to know machine learning. You do need to know Blueprints.
 
 ## License
 
-The plugin is licensed under the Apache License 2.0. See the `LICENSE` file in the plugin folder.
+From GitHub, the plugin is licensed under the Apache License 2.0 (the `LICENSE` file). From Fab, the Fab license applies. Third-party licenses are in `THIRD_PARTY_NOTICES.md`.

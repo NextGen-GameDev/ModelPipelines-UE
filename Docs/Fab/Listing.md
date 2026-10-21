@@ -126,10 +126,10 @@ Issues: https://github.com/NextGen-GameDev/ModelPipelines-UE/issues
 
 ## License notes
 
-- The plugin code is under the Apache License 2.0 (`LICENSE`). Contributions need the contributor agreement in `CLA.md` on GitHub.
+- Fab package: the Fab license applies; no license file ships. GitHub: Apache License 2.0 (`LICENSE`). Contributions need the contributor agreement in `CLA.md` on GitHub.
 - Third-party components and their licenses (tokenizers-cpp, Hugging Face tokenizers, ONNX Runtime, the sample models and photos) are in `THIRD_PARTY_NOTICES.md`.
 - Models carry their own licenses. See `Docs/ModelLicenses.md`.
-- Free. The code stays under Apache-2.0; `LICENSE` ships in the package.
+- Free.
 
 ## Related
 
